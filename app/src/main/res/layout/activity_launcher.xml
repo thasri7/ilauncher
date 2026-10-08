@@ -1,239 +1,249 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Root has no padding: system-bar insets are applied in code so the scrim and overlays can
+     still draw edge to edge behind the status and navigation bars. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/launcher_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#A60A0D14"
-    android:fitsSystemWindows="true">
+    android:clipChildren="false">
 
-    <!-- Top Status & Navigation Bar -->
     <LinearLayout
-        android:id="@+id/ll_top_nav"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_alignParentTop="true"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
-
-        <TextView
-            android:id="@+id/tv_metro_title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Start"
-            android:textColor="#FFFFFF"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/tv_page_indicator"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:text="Tiles"
-            android:textColor="@color/metro_cyan"
-            android:textSize="13sp"
-            android:textStyle="bold" />
-
-        <View
-            android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
-
-        <!-- Add Tile Button (+) -->
-        <FrameLayout
-            android:id="@+id/btn_add_tile"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="@drawable/bg_metro_tile"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="➕"
-                android:textSize="16sp" />
-        </FrameLayout>
-
-        <!-- Express Inbuilt Keyboard Search Button -->
-        <FrameLayout
-            android:id="@+id/btn_open_search"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="@drawable/bg_metro_tile"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="🔍"
-                android:textSize="18sp" />
-        </FrameLayout>
-
-        <!-- Switch between Tiles and All Apps -->
-        <FrameLayout
-            android:id="@+id/btn_toggle_page"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_metro_tile"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:id="@+id/tv_btn_toggle_icon"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="➔"
-                android:textColor="@color/metro_cyan"
-                android:textSize="18sp" />
-        </FrameLayout>
-
-        <!-- Settings Button -->
-        <FrameLayout
-            android:id="@+id/btn_open_settings"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_metro_tile"
-            android:clickable="true"
-            android:focusable="true">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="⚙️"
-                android:textSize="18sp" />
-        </FrameLayout>
-    </LinearLayout>
-
-    <!-- Main Content: ViewPager2 with 3D Cube Rotation (Tiles on a Cube) -->
-    <androidx.viewpager2.widget.ViewPager2
-        android:id="@+id/pager_launcher"
+        android:id="@+id/launcher_content"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_below="@id/ll_top_nav"
         android:clipChildren="false"
-        android:clipToPadding="false"
-        android:overScrollMode="never" />
+        android:orientation="vertical">
 
-    <!-- Integrated Inbuilt Custom Keyboard Search Overlay -->
+        <!-- Slim Metro header: page title on the left, glyph buttons on the right. -->
+        <LinearLayout
+            android:id="@+id/ll_top_nav"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="18dp"
+            android:paddingEnd="6dp">
+
+            <TextView
+                android:id="@+id/tv_metro_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:fontFamily="sans-serif-light"
+                android:shadowColor="#99000000"
+                android:shadowRadius="4"
+                android:text="start"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp" />
+
+            <ImageView
+                android:id="@+id/btn_open_search"
+                style="@style/MetroTopBarButton"
+                android:contentDescription="Search"
+                android:src="@drawable/ic_m_search" />
+
+            <ImageView
+                android:id="@+id/btn_toggle_page"
+                style="@style/MetroTopBarButton"
+                android:contentDescription="All apps"
+                android:src="@drawable/ic_m_apps" />
+
+            <ImageView
+                android:id="@+id/btn_open_settings"
+                style="@style/MetroTopBarButton"
+                android:contentDescription="Settings"
+                android:src="@drawable/ic_m_more" />
+        </LinearLayout>
+
+        <androidx.viewpager2.widget.ViewPager2
+            android:id="@+id/pager_launcher"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="false"
+            android:overScrollMode="never" />
+    </LinearLayout>
+
+    <!-- Customise-mode bar, shown while tiles are being edited. -->
+    <LinearLayout
+        android:id="@+id/ll_edit_bar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="18dp"
+        android:background="@drawable/bg_metro_editbar"
+        android:elevation="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/btn_edit_add"
+            style="@style/MetroEditBarButton">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_m_add" />
+
+            <TextView
+                style="@style/MetroEditBarText"
+                android:text="Add tiles" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btn_edit_done"
+            style="@style/MetroEditBarButton">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_m_check" />
+
+            <TextView
+                style="@style/MetroEditBarText"
+                android:text="Done" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Built-in search with the launcher's own keyboard (apps, maths, web). -->
     <LinearLayout
         android:id="@+id/panel_inbuilt_keyboard_search"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#FA0B0E14"
+        android:background="#F20B0C0F"
         android:clickable="true"
         android:focusable="true"
         android:orientation="vertical"
         android:visibility="gone">
 
-        <!-- Search Bar Top Section -->
         <LinearLayout
+            android:id="@+id/ll_search_header"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="12dp">
+            android:paddingStart="12dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="8dp">
 
-            <EditText
-                android:id="@+id/et_express_search"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_metro_search"
-                android:hint="Type app name or 45*12..."
-                android:imeOptions="actionSearch"
-                android:inputType="textNoSuggestions"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:textColor="#FFFFFF"
-                android:textColorHint="@color/metro_text_dim"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/btn_clear_search"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_metro_tile"
-                android:gravity="center"
-                android:text="✕"
-                android:textColor="#FFFFFF"
-                android:textSize="18sp" />
-
-            <TextView
+            <ImageView
                 android:id="@+id/btn_close_keyboard_search"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_metro_tile"
-                android:gravity="center"
-                android:text="▼"
-                android:textColor="@color/metro_cyan"
-                android:textSize="16sp" />
+                style="@style/MetroTopBarButton"
+                android:contentDescription="Close search"
+                android:src="@drawable/ic_m_back" />
+
+            <LinearLayout
+                android:id="@+id/ll_search_box"
+                android:layout_width="0dp"
+                android:layout_height="46dp"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="4dp">
+
+                <ImageView
+                    android:id="@+id/iv_search_glyph"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_m_search" />
+
+                <EditText
+                    android:id="@+id/et_express_search"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="@null"
+                    android:hint="Apps, 45*12, or the web"
+                    android:imeOptions="actionSearch"
+                    android:importantForAutofill="no"
+                    android:inputType="textNoSuggestions"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="8dp"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#80FFFFFF"
+                    android:textSize="16sp" />
+
+                <ImageView
+                    android:id="@+id/btn_clear_search"
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Clear"
+                    android:padding="7dp"
+                    android:src="@drawable/ic_m_close" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Live Math Calculator or Web Search Shortcut Result Strip -->
+        <!-- Instant answers: maths result and web search. -->
         <LinearLayout
             android:id="@+id/ll_search_action_strip"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:paddingBottom="6dp"
+            android:orientation="vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
             android:visibility="gone">
 
             <TextView
                 android:id="@+id/tv_math_calc_result"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_metro_tile"
-                android:backgroundTint="@color/metro_green"
-                android:paddingStart="12dp"
-                android:paddingTop="6dp"
-                android:paddingEnd="12dp"
-                android:paddingBottom="6dp"
-                android:text="= 0"
+                android:layout_marginBottom="6dp"
+                android:fontFamily="sans-serif-light"
+                android:paddingStart="14dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="10dp"
                 android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
+                android:textSize="30sp"
                 android:visibility="gone" />
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/btn_web_search_action"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_metro_tile"
-                android:backgroundTint="@color/metro_blue"
-                android:paddingStart="12dp"
-                android:paddingTop="6dp"
-                android:paddingEnd="12dp"
-                android:paddingBottom="6dp"
-                android:text="🌐 Search Google"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp" />
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_m_forward" />
+
+                <TextView
+                    android:id="@+id/tv_web_search_label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Real-time Filtered Search Results -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rv_search_results"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
             android:clipToPadding="false"
-            android:paddingBottom="10dp" />
+            android:overScrollMode="never"
+            android:paddingBottom="8dp" />
 
-        <!-- Inbuilt Custom Keyboard Board Container -->
         <include
             android:id="@+id/inbuilt_custom_keyboard_view"
             layout="@layout/layout_launcher_keyboard"
@@ -241,4 +251,10 @@
             android:layout_height="wrap_content" />
     </LinearLayout>
 
-</RelativeLayout>
+    <!-- Menus, sheets and panels are added here by MetroOverlay. -->
+    <FrameLayout
+        android:id="@+id/overlay_host"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false" />
+</FrameLayout>

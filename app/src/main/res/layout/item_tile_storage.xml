@@ -1,49 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Device tile: storage on the front, memory on the back (peeks). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tile_surface"
     android:layout_width="match_parent"
-    android:layout_height="130dp"
-    android:padding="3dp">
+    android:layout_height="match_parent">
 
     <LinearLayout
-        android:id="@+id/tile_storage_container"
+        android:id="@+id/face_front"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@drawable/bg_metro_tile"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="8dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="DEVICE HEALTH"
-            android:textColor="@color/metro_text_dim"
-            android:textSize="11sp"
-            android:textStyle="bold" />
+        <ImageView
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_m_storage" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
 
         <TextView
             android:id="@+id/tv_storage_main"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="68%"
+            android:fontFamily="sans-serif-light"
+            android:includeFontPadding="false"
             android:textColor="#FFFFFF"
-            android:textSize="30sp"
-            android:textStyle="bold" />
+            android:textSize="32sp" />
 
         <ProgressBar
             android:id="@+id/pb_storage_bar"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
             android:layout_height="4dp"
+            android:layout_marginTop="4dp"
             android:max="100"
-            android:progress="68"
-            android:progressTint="@color/metro_purple" />
+            android:progressBackgroundTint="#55FFFFFF"
+            android:progressTint="#FFFFFF" />
 
         <TextView
             android:id="@+id/tv_storage_detail"
+            style="@style/MetroTileLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/face_back"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:visibility="invisible">
+
+        <ImageView
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_m_apps" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/tv_memory_main"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Storage Free: 120 GB"
-            android:textColor="@color/metro_text_dim"
-            android:textSize="11sp" />
+            android:fontFamily="sans-serif-light"
+            android:includeFontPadding="false"
+            android:textColor="#FFFFFF"
+            android:textSize="32sp" />
+
+        <ProgressBar
+            android:id="@+id/pb_memory_bar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="4dp"
+            android:max="100"
+            android:progressBackgroundTint="#55FFFFFF"
+            android:progressTint="#FFFFFF" />
+
+        <TextView
+            android:id="@+id/tv_memory_detail"
+            style="@style/MetroTileLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
     </LinearLayout>
 </FrameLayout>

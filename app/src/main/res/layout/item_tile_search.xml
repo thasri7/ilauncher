@@ -1,52 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Search tile: opens the built-in keyboard search (apps, maths, web). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tile_surface"
     android:layout_width="match_parent"
-    android:layout_height="72dp"
-    android:padding="3dp">
+    android:layout_height="match_parent">
 
     <LinearLayout
-        android:id="@+id/tile_search_container"
+        android:id="@+id/face_front"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@drawable/bg_metro_search"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <ImageView
+            android:id="@+id/iv_search_icon"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_m_search" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
 
         <TextView
-            android:layout_width="wrap_content"
+            android:id="@+id/tv_search_hint"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="🔍"
-            android:textSize="18sp"
-            android:layout_marginEnd="10dp" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Express Search &amp; Calc"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Tap to open custom keyboard search"
-                android:textColor="@color/metro_cyan"
-                android:textSize="11sp" />
-        </LinearLayout>
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-light"
+            android:maxLines="1"
+            android:text="Apps, maths &amp; web"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
 
         <TextView
+            android:id="@+id/tv_search_label"
+            style="@style/MetroTileLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="⌨️"
-            android:textSize="20sp" />
+            android:text="Search" />
     </LinearLayout>
 </FrameLayout>

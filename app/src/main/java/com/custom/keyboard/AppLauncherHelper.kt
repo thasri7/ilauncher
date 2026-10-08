@@ -15,6 +15,12 @@ class AppLauncherHelper(private val context: Context) {
         loadInstalledApps()
     }
 
+    /** Re-reads the installed apps, e.g. after a package was installed or removed. */
+    fun reload() {
+        installedApps.clear()
+        loadInstalledApps()
+    }
+
     private fun loadInstalledApps() {
         try {
             val pm = context.packageManager
@@ -58,6 +64,13 @@ class AppLauncherHelper(private val context: Context) {
     }
 
     fun getAllApps(): List<AppEntry> = installedApps.sortedBy { it.name.lowercase() }
+
+    fun launchIntentFor(packageName: String): Intent? =
+        try {
+            context.packageManager.getLaunchIntentForPackage(packageName)
+        } catch (_: Exception) {
+            null
+        }
 
     fun launchApp(packageName: String): Boolean {
         return try {

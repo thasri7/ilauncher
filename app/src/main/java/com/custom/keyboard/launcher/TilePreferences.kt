@@ -2,52 +2,92 @@ package com.custom.keyboard.launcher
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
 import com.custom.keyboard.models.TileItem
+import com.custom.keyboard.models.TileSize
 import com.custom.keyboard.models.TileType
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.properties.ReadWriteProperty
+import kotlin.reflect.KProperty
 
 class TilePreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("metro_launcher_prefs", Context.MODE_PRIVATE)
 
-    var metroTheme: String
-        get() = prefs.getString("metro_theme", "cyber_dark") ?: "cyber_dark"
-        set(value) = prefs.edit().putString("metro_theme", value).apply()
+    // ── Start screen look ────────────────────────────────────────────────────────────────
+    /** 4 = Windows 10 Mobile default, 6 = "Show more tiles". */
+    var columns by intPref("grid_columns", 6)
+    var gutterDp by intPref("tile_gutter_dp", 4)
+    var cornerRadiusDp by intPref("tile_corner_dp", 0)
+    /** Tile opacity in percent; lower values let the wallpaper show through like W10M transparency. */
+    var tileOpacity by intPref("tile_opacity", 85)
+    /** Black scrim over the wallpaper, in percent. */
+    var wallpaperDim by intPref("wallpaper_dim", 35)
+    var accentColor by stringPref("accent_color", "#0050EF")
+    /** "accent" paints every tile with the accent, "icon" derives each app tile's colour from its icon. */
+    var tileColorMode by stringPref("tile_color_mode", "accent")
+    var themedIcons by boolPref("themed_icons", true)
+    var showLabels by boolPref("show_labels", true)
 
-    var autoGrowEnabled: Boolean
-        get() = prefs.getBoolean("auto_grow_enabled", true)
-        set(value) = prefs.edit().putBoolean("auto_grow_enabled", value).apply()
+    // ── Motion ───────────────────────────────────────────────────────────────────────────
+    var animationsEnabled by boolPref("animations_enabled", true)
+    var tiltEnabled by boolPref("tilt_enabled", true)
+    var liveTilesEnabled by boolPref("live_tiles_enabled", true)
+    /** "slide", "cube" or "depth". */
+    var pageTransition by stringPref("page_transition", "slide")
+
+    // ── Behaviour ────────────────────────────────────────────────────────────────────────
+    var autoGrowEnabled by boolPref("auto_grow_enabled", true)
+    /** Set once the first-run app tiles were added, so unpinning them all doesn't bring them back. */
+    var appsSeeded by boolPref("apps_seeded", false)
+
+    val accentColorInt: Int
+        get() = try { Color.parseColor(accentColor) } catch (_: Exception) { Color.parseColor("#0050EF") }
 
     fun loadTiles(): MutableList<TileItem> {
         val raw = prefs.getString("tiles_json", null)
-        if (raw.isNullOrEmpty()) {
-            return getDefaultTiles()
-        }
+        if (raw.isNullOrEmpty()) return getDefaultTiles()
         val list = mutableListOf<TileItem>()
         try {
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    TileItem(
-                        id = obj.getString("id"),
-                        type = TileType.valueOf(obj.getString("type")),
-                        title = obj.getString("title"),
-                        packageName = obj.optString("packageName").takeIf { it.isNotEmpty() },
-                        spanX = obj.optInt("spanX", 1),
-                        spanY = obj.optInt("spanY", 1),
-                        accentColorHex = obj.optString("accentColorHex", "#0078D7"),
-                        customSubtitle = obj.optString("customSubtitle", ""),
-                        badgeCount = obj.optString("badgeCount", ""),
-                        launchCount = obj.optInt("launchCount", 0),
-                        contactPhone = obj.optString("contactPhone", "")
-                    )
-                )
+                parseTile(arr.getJSONObject(i))?.let { list.add(it) }
             }
         } catch (_: Exception) {
             return getDefaultTiles()
         }
         return list
+    }
+
+    private fun parseTile(obj: JSONObject): TileItem? {
+        val type = runCatching { TileType.valueOf(obj.getString("type")) }.getOrNull() ?: return null
+        // Layouts saved before the 4/6-column grid only had spanX/spanY on a 2-column grid and
+        // hard-coded colours; migrate them to real tile sizes and let them follow the accent.
+        val isLegacy = !obj.has("size")
+        val size = if (isLegacy) {
+            legacySize(obj.optInt("spanX", 1), obj.optInt("spanY", 1))
+        } else {
+            runCatching { TileSize.valueOf(obj.getString("size")) }.getOrDefault(TileSize.MEDIUM)
+        }
+        val color = if (isLegacy) null else obj.optString("accentColorHex", "").takeIf { it.isNotEmpty() }
+        return TileItem(
+            id = obj.getString("id"),
+            type = type,
+            title = obj.optString("title", ""),
+            packageName = obj.optString("packageName").takeIf { it.isNotEmpty() },
+            size = size,
+            accentColorHex = color,
+            customSubtitle = obj.optString("customSubtitle", ""),
+            launchCount = obj.optInt("launchCount", 0),
+            contactPhone = obj.optString("contactPhone", ""),
+            liveEnabled = obj.optBoolean("liveEnabled", true)
+        )
+    }
+
+    private fun legacySize(spanX: Int, spanY: Int): TileSize = when {
+        spanX >= 2 && spanY >= 2 -> TileSize.LARGE
+        spanX >= 2 -> TileSize.WIDE
+        else -> TileSize.MEDIUM
     }
 
     fun saveTiles(tiles: List<TileItem>) {
@@ -58,32 +98,47 @@ class TilePreferences(context: Context) {
                 put("type", tile.type.name)
                 put("title", tile.title)
                 put("packageName", tile.packageName ?: "")
-                put("spanX", tile.spanX)
-                put("spanY", tile.spanY)
-                put("accentColorHex", tile.accentColorHex)
+                put("size", tile.size.name)
+                put("accentColorHex", tile.accentColorHex ?: "")
                 put("customSubtitle", tile.customSubtitle)
-                put("badgeCount", tile.badgeCount)
                 put("launchCount", tile.launchCount)
                 put("contactPhone", tile.contactPhone)
+                put("liveEnabled", tile.liveEnabled)
             }
             arr.put(obj)
         }
         prefs.edit().putString("tiles_json", arr.toString()).apply()
     }
 
-    fun recordAppLaunch(packageName: String, tiles: MutableList<TileItem>): Boolean {
-        var changed = false
-        val tile = tiles.firstOrNull { it.packageName == packageName }
-        if (tile != null) {
-            tile.launchCount++
-            // Smart auto-grow: if launched >= 3 times and still small 1x1, grow to wide 2x1!
-            if (autoGrowEnabled && tile.launchCount >= 3 && tile.spanX == 1) {
-                tile.spanX = 2
-                changed = true
-            }
-            saveTiles(tiles)
+    /** Launch counts for every app, pinned or not; feeds "Most used" in All apps. */
+    fun usageCounts(): Map<String, Int> {
+        val raw = prefs.getString("usage_json", null) ?: return emptyMap()
+        return try {
+            val obj = JSONObject(raw)
+            obj.keys().asSequence().associateWith { obj.optInt(it, 0) }
+        } catch (_: Exception) {
+            emptyMap()
         }
-        return changed
+    }
+
+    /**
+     * Records a launch. Returns the tile that auto-grew from small to medium because it is used a
+     * lot, or null when no tile changed size.
+     */
+    fun recordAppLaunch(packageName: String, tiles: MutableList<TileItem>): TileItem? {
+        val usage = usageCounts().toMutableMap()
+        usage[packageName] = (usage[packageName] ?: 0) + 1
+        prefs.edit().putString("usage_json", JSONObject(usage).toString()).apply()
+
+        val tile = tiles.firstOrNull { it.packageName == packageName } ?: return null
+        tile.launchCount++
+        var grown: TileItem? = null
+        if (autoGrowEnabled && tile.launchCount >= 5 && tile.size == TileSize.SMALL) {
+            tile.size = TileSize.MEDIUM
+            grown = tile
+        }
+        saveTiles(tiles)
+        return grown
     }
 
     fun resetToDefaults(): MutableList<TileItem> {
@@ -92,59 +147,41 @@ class TilePreferences(context: Context) {
         return defaults
     }
 
-    private fun getDefaultTiles(): MutableList<TileItem> {
-        return mutableListOf(
-            TileItem(
-                id = "calendar_tile",
-                type = TileType.CALENDAR_BIG,
-                title = "Calendar",
-                spanX = 2,
-                spanY = 1,
-                accentColorHex = "#F3F4F6",
-                customSubtitle = "Today"
-            ),
-            TileItem(
-                id = "weather_tile",
-                type = TileType.WEATHER_LIVE,
-                title = "The Weather Channel",
-                spanX = 1,
-                spanY = 1,
-                accentColorHex = "#0078D7",
-                customSubtitle = "72° Sunny"
-            ),
-            TileItem(
-                id = "battery_tile",
-                type = TileType.BATTERY_STATUS,
-                title = "Battery",
-                spanX = 1,
-                spanY = 1,
-                accentColorHex = "#107C41"
-            ),
-            TileItem(
-                id = "search_tile",
-                type = TileType.EXPRESS_SEARCH,
-                title = "Express Search & Keyboard",
-                spanX = 2,
-                spanY = 1,
-                accentColorHex = "#00B7C3"
-            ),
-            TileItem(
-                id = "storage_tile",
-                type = TileType.STORAGE_STATS,
-                title = "Device Health",
-                spanX = 1,
-                spanY = 1,
-                accentColorHex = "#8764B8"
-            ),
-            TileItem(
-                id = "kb_settings_tile",
-                type = TileType.KEYBOARD_SETTINGS,
-                title = "Custom Keyboard",
-                customSubtitle = "Customize & Switch IME",
-                spanX = 1,
-                spanY = 1,
-                accentColorHex = "#D83B01"
-            )
-        )
+    private fun getDefaultTiles(): MutableList<TileItem> = mutableListOf(
+        TileItem(id = "clock_tile", type = TileType.CLOCK_WEATHER, title = "Clock", size = TileSize.WIDE),
+        TileItem(id = "calendar_tile", type = TileType.CALENDAR_BIG, title = "Calendar", size = TileSize.MEDIUM),
+        TileItem(id = "search_tile", type = TileType.EXPRESS_SEARCH, title = "Search", size = TileSize.WIDE),
+        TileItem(id = "battery_tile", type = TileType.BATTERY_STATUS, title = "Battery", size = TileSize.MEDIUM),
+        TileItem(id = "media_tile", type = TileType.MEDIA_PLAYER, title = "Music", size = TileSize.WIDE),
+        TileItem(id = "storage_tile", type = TileType.STORAGE_STATS, title = "Device", size = TileSize.MEDIUM),
+        TileItem(
+            id = "kb_settings_tile",
+            type = TileType.KEYBOARD_SETTINGS,
+            title = "Keyboard",
+            customSubtitle = "Themes & layouts",
+            size = TileSize.SMALL
+        ),
+        TileItem(id = "settings_tile", type = TileType.DEVICE_SETTINGS, title = "Settings", size = TileSize.SMALL)
+    )
+
+    private fun intPref(key: String, default: Int) = object : ReadWriteProperty<Any?, Int> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>): Int = prefs.getInt(key, default)
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Int) {
+            prefs.edit().putInt(key, value).apply()
+        }
+    }
+
+    private fun boolPref(key: String, default: Boolean) = object : ReadWriteProperty<Any?, Boolean> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>): Boolean = prefs.getBoolean(key, default)
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
+            prefs.edit().putBoolean(key, value).apply()
+        }
+    }
+
+    private fun stringPref(key: String, default: String) = object : ReadWriteProperty<Any?, String> {
+        override fun getValue(thisRef: Any?, property: KProperty<*>): String = prefs.getString(key, default) ?: default
+        override fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
+            prefs.edit().putString(key, value).apply()
+        }
     }
 }

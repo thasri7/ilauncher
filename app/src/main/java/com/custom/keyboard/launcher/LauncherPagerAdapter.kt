@@ -6,9 +6,10 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.custom.keyboard.R
 
+/** The two launcher pages: Start (tiles) and All apps. */
 class LauncherPagerAdapter(
     private val onTilesPageReady: (RecyclerView) -> Unit,
-    private val onDrawerPageReady: (RecyclerView) -> Unit
+    private val onDrawerPageReady: (View) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -22,25 +23,17 @@ class LauncherPagerAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
-        return if (viewType == PAGE_TILES) {
-            val view = inflater.inflate(R.layout.page_launcher_tiles, parent, false)
-            TilesPageViewHolder(view)
-        } else {
-            val view = inflater.inflate(R.layout.page_launcher_drawer, parent, false)
-            DrawerPageViewHolder(view)
-        }
+        val layout = if (viewType == PAGE_TILES) R.layout.page_launcher_tiles else R.layout.page_launcher_drawer
+        return PageViewHolder(inflater.inflate(layout, parent, false))
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        if (holder is TilesPageViewHolder) {
-            val rv = holder.itemView.findViewById<RecyclerView>(R.id.rv_metro_tiles)
-            onTilesPageReady(rv)
-        } else if (holder is DrawerPageViewHolder) {
-            val rv = holder.itemView.findViewById<RecyclerView>(R.id.rv_app_drawer)
-            onDrawerPageReady(rv)
+        if (position == PAGE_TILES) {
+            onTilesPageReady(holder.itemView.findViewById(R.id.rv_metro_tiles))
+        } else {
+            onDrawerPageReady(holder.itemView)
         }
     }
 
-    class TilesPageViewHolder(view: View) : RecyclerView.ViewHolder(view)
-    class DrawerPageViewHolder(view: View) : RecyclerView.ViewHolder(view)
+    class PageViewHolder(view: View) : RecyclerView.ViewHolder(view)
 }

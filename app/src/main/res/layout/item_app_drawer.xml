@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="58dp"
+    android:layout_height="60dp"
     android:background="?android:attr/selectableItemBackground"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="20dp"
+    android:paddingStart="16dp"
     android:paddingEnd="20dp">
 
     <ImageView
         android:id="@+id/iv_drawer_icon"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:contentDescription="App Icon" />
+        android:layout_width="42dp"
+        android:layout_height="42dp"
+        android:contentDescription="@null" />
 
     <TextView
         android:id="@+id/tv_drawer_name"
@@ -21,17 +21,18 @@
         android:layout_marginStart="16dp"
         android:layout_weight="1"
         android:ellipsize="end"
+        android:fontFamily="sans-serif"
         android:maxLines="1"
-        android:text="App Name"
+        android:shadowColor="#80000000"
+        android:shadowRadius="3"
         android:textColor="#FFFFFF"
-        android:textSize="15sp"
-        android:textStyle="normal" />
+        android:textSize="16sp" />
 
-    <TextView
-        android:id="@+id/tv_drawer_pin_indicator"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="📌"
-        android:textSize="12sp"
+    <ImageView
+        android:id="@+id/iv_drawer_pin"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:contentDescription="Pinned to Start"
+        android:src="@drawable/ic_m_pin"
         android:visibility="gone" />
 </LinearLayout>

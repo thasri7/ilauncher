@@ -1,57 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Shortcut tile for launcher actions (keyboard settings, device settings, weather). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tile_surface"
     android:layout_width="match_parent"
-    android:layout_height="90dp"
-    android:padding="3dp">
+    android:layout_height="match_parent">
 
-    <LinearLayout
-        android:id="@+id/tile_action_container"
+    <FrameLayout
+        android:id="@+id/face_front"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@drawable/bg_metro_tile"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
+        android:padding="7dp">
 
-        <TextView
-            android:id="@+id/tv_action_icon"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:gravity="center"
-            android:text="⌨️"
-            android:textSize="22sp" />
+        <ImageView
+            android:id="@+id/iv_action_icon"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null" />
 
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="12dp"
+            android:layout_gravity="bottom|start"
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/tv_action_title"
-                android:layout_width="wrap_content"
+                android:id="@+id/tv_action_subtitle"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Custom Keyboard"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#CCFFFFFF"
+                android:textSize="11sp" />
 
             <TextView
-                android:id="@+id/tv_action_subtitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Configure &amp; Switch IME"
-                android:textColor="@color/metro_text_dim"
-                android:textSize="11sp" />
+                android:id="@+id/tv_action_title"
+                style="@style/MetroTileLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
         </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="➔"
-            android:textColor="@color/metro_cyan"
-            android:textSize="16sp" />
-    </LinearLayout>
+    </FrameLayout>
 </FrameLayout>
