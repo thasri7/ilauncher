@@ -1,0 +1,501 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/kb_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="iKeyboard Settings"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Optimized for Huawei P70 Ultra High-DPI"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Setup Activation Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <Button
+                android:id="@+id/btn_enable_ime"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:backgroundTint="@color/primary"
+                android:text="1. Enable"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:layout_marginEnd="6dp" />
+
+            <Button
+                android:id="@+id/btn_select_ime"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:backgroundTint="@color/kb_action_key_bg"
+                android:text="2. Switch"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:layout_marginStart="6dp" />
+        </LinearLayout>
+
+        <!-- Live Typing Preview -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Live Typing Test:"
+            android:textColor="@color/kb_text_secondary"
+            android:textSize="13sp"
+            android:layout_marginBottom="6dp" />
+
+        <EditText
+            android:id="@+id/et_test_typing"
+            android:layout_width="match_parent"
+            android:layout_height="80dp"
+            android:background="@drawable/bg_key"
+            android:gravity="top|start"
+            android:hint="@string/test_hint"
+            android:textColorHint="@color/kb_text_secondary"
+            android:textColor="@color/kb_text_primary"
+            android:padding="12dp"
+            android:textSize="16sp"
+            android:layout_marginBottom="24dp" />
+
+        <!-- SECTION: KEY TEXT SIZE -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔤 KEY TEXT SIZE"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_font_size"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/rb_font_normal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Normal (20sp)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_font_large"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Large (22sp)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_font_xlarge"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Huge (25sp)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- SECTION: FONT TYPEFACE -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🖋️ FONT TYPEFACE STYLE"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_font_typeface"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/rb_typeface_sans"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Clean Sans"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_typeface_mono"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Monospace"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_typeface_serif"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Classic Serif"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- SECTION: SECONDARY LANGUAGE -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🌐 SECONDARY LANGUAGE TOGGLE"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_secondary_lang"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/rb_lang_arabic"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="العربية (Arabic)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_lang_french"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Français (French)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_lang_spanish"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Español (Spanish)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- SECTION: KEYBOARD HEIGHT -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📏 KEYBOARD HEIGHT"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_height"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/rb_height_compact"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Compact"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_height_normal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Normal"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_height_tall"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Tall"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- SECTION: THEMES -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🎨 COLOR THEME"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_theme"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/rb_theme_slate"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Dark Slate"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_theme_amoled"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="AMOLED Black"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
+                android:id="@+id/rb_theme_neon"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Cyber Neon"
+                android:textColor="@color/kb_accent"
+                android:textSize="13sp" />
+        </RadioGroup>
+
+        <!-- SECTION: TYPING PREFERENCES -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚙️ TYPING &amp; FEEDBACK"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_show_numbers"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Always show dedicated number row (0-9)"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_haptic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Haptic vibration feedback on keypress"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_sound"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Keyboard audio click sound effect"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_double_tap_space"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Double-tap space inserts period (. )"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_auto_correct"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Offline auto-correction &amp; suggestions"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_auto_cap"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Auto-capitalize first letter of sentences"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_key_popups"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Show enlarged key pop-up preview on tap"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Long Press Delay -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⏱️ LONG-PRESS HOLD DELAY"
+            android:textColor="@color/kb_accent"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp" />
+
+        <RadioGroup
+            android:id="@+id/rg_long_press"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="24dp">
+
+            <RadioButton
+                android:id="@+id/rb_delay_fast"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Fast (250ms)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="12sp" />
+
+            <RadioButton
+                android:id="@+id/rb_delay_normal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Normal (320ms)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="12sp" />
+
+            <RadioButton
+                android:id="@+id/rb_delay_relaxed"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Relaxed (450ms)"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="12sp" />
+        </RadioGroup>
+
+        <!-- SECTION: TEXT SHORTCUTS MANAGER -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚡ TEXT SHORTCUTS MANAGER"
+            android:textColor="@color/kb_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Type trigger anywhere followed by Space to auto-expand."
+            android:textColor="@color/kb_text_secondary"
+            android:textSize="12sp"
+            android:layout_marginBottom="12dp" />
+
+        <LinearLayout
+            android:id="@+id/shortcuts_list_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Add Shortcut Input Block -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_key"
+            android:padding="12dp"
+            android:layout_marginBottom="24dp">
+
+            <EditText
+                android:id="@+id/et_shortcut_trigger"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:hint="Trigger (e.g. /mycard or /office)"
+                android:textColorHint="@color/kb_text_secondary"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="14sp"
+                android:singleLine="true"
+                android:layout_marginBottom="8dp" />
+
+            <EditText
+                android:id="@+id/et_shortcut_expansion"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:hint="Expanded text..."
+                android:textColorHint="@color/kb_text_secondary"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="14sp"
+                android:singleLine="true"
+                android:layout_marginBottom="10dp" />
+
+            <Button
+                android:id="@+id/btn_add_shortcut"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:backgroundTint="@color/primary"
+                android:text="+ Add Shortcut"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="All settings are saved offline and applied immediately."
+            android:textColor="@color/kb_text_secondary"
+            android:textSize="12sp"
+            android:layout_marginBottom="20dp" />
+
+    </LinearLayout>
+</ScrollView>

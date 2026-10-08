@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/keyboard_outer_frame"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/kb_bg">
+
+    <LinearLayout
+        android:id="@+id/keyboard_root"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/kb_bg"
+        android:orientation="vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="8dp">
+
+        <!-- Fold / Unfold Slim Header (Shown when toolbar is folded) -->
+        <LinearLayout
+            android:id="@+id/fold_bar"
+            android:layout_width="match_parent"
+            android:layout_height="26dp"
+            android:visibility="gone"
+            android:gravity="center"
+            android:background="@color/kb_toolbar_bg">
+
+            <TextView
+                android:id="@+id/btn_unfold"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="▴ Tap to unfold toolbar"
+                android:textColor="@color/kb_accent"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Top Action Toolbar -->
+        <!-- Top Action Toolbar (Clean Gboard/Cyber-Glass Icon Bar) -->
+        <HorizontalScrollView
+            android:id="@+id/top_toolbar_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:scrollbars="none"
+            android:overScrollMode="never"
+            android:background="@color/kb_toolbar_bg"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:layout_marginBottom="2dp">
+
+            <LinearLayout
+                android:id="@+id/toolbar_container"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- 1. Grid Menu / All Features Toggle (Like Gboard 4-box icon) -->
+                <TextView
+                    android:id="@+id/action_fold"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="⊞"
+                    android:textColor="@color/kb_accent"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <!-- 2. Voice Input (Mic icon in round pill) -->
+                <TextView
+                    android:id="@+id/action_voice"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="🎙️"
+                    android:textSize="14sp" />
+
+                <!-- 3. Clipboard History -->
+                <TextView
+                    android:id="@+id/action_clips"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="📋"
+                    android:textSize="14sp" />
+
+                <!-- 4. Quick Phrases -->
+                <TextView
+                    android:id="@+id/action_quick"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="💬"
+                    android:textSize="14sp" />
+
+                <!-- 5. Instant Translator -->
+                <TextView
+                    android:id="@+id/action_translate"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="🌐"
+                    android:textSize="14sp" />
+
+                <!-- 6. Launch Apps Drawer -->
+                <TextView
+                    android:id="@+id/action_apps"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="🚀"
+                    android:textSize="14sp" />
+
+                <!-- 7. Fancy Fonts -->
+                <TextView
+                    android:id="@+id/action_fancy"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="✨"
+                    android:textSize="14sp" />
+
+                <!-- 8. Cursor D-pad & Text Select/Cut/Copy Mode -->
+                <TextView
+                    android:id="@+id/action_focus"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="🎯"
+                    android:textSize="14sp" />
+
+                <!-- 9. One-Handed / Float Mode -->
+                <TextView
+                    android:id="@+id/action_one_hand"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="🪟"
+                    android:textSize="14sp" />
+
+                <!-- 10. Undo -->
+                <TextView
+                    android:id="@+id/action_undo"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="↩️"
+                    android:textSize="14sp" />
+
+                <!-- 11. Settings -->
+                <TextView
+                    android:id="@+id/action_settings"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp"
+                    android:text="⚙️"
+                    android:textSize="14sp" />
+
+                <!-- 12. Switch Keyboard -->
+                <TextView
+                    android:id="@+id/action_switch_ime"
+                    android:layout_width="34dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_toolbar_icon"
+                    android:gravity="center"
+                    android:text="⌨️"
+                    android:textSize="14sp" />
+
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <!-- Unified Smart Suggestion & Action Strip -->
+        <FrameLayout
+            android:id="@+id/smart_strip_frame"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:layout_marginBottom="3dp"
+            android:background="@color/kb_toolbar_bg">
+
+            <!-- View 1: Active 3-Candidate Suggestions Bar (Typing) -->
+            <LinearLayout
+                android:id="@+id/suggestion_typing_bar"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/suggestion_left"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:textColor="@color/kb_text_secondary"
+                    android:textSize="14sp"
+                    android:singleLine="true" />
+
+                <View
+                    android:id="@+id/divider_suggestion_1"
+                    android:layout_width="1dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center_vertical"
+                    android:background="@color/kb_key_border" />
+
+                <TextView
+                    android:id="@+id/suggestion_center"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.4"
+                    android:gravity="center"
+                    android:textColor="@color/accent"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:singleLine="true" />
+
+                <View
+                    android:id="@+id/divider_suggestion_2"
+                    android:layout_width="1dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center_vertical"
+                    android:background="@color/kb_key_border" />
+
+                <TextView
+                    android:id="@+id/suggestion_right"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:textColor="@color/kb_text_secondary"
+                    android:textSize="14sp"
+                    android:singleLine="true" />
+            </LinearLayout>
+
+            <!-- View 2: Smart Idle Bar (When NOT typing - NEVER BLANK!) -->
+            <HorizontalScrollView
+                android:id="@+id/smart_idle_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp">
+
+                <LinearLayout
+                    android:id="@+id/smart_idle_container"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
+            <!-- View 3: In-Bar Feature Drawer (Quick replies / Clips / Translate / Fonts) -->
+            <HorizontalScrollView
+                android:id="@+id/feature_drawer_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:visibility="gone"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp">
+
+                <LinearLayout
+                    android:id="@+id/feature_drawer_container"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
+        </FrameLayout>
+
+        <!-- Main Keyboard Keys Wrapper -->
+        <LinearLayout
+            android:id="@+id/keyboard_keys_wrapper"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Row 0: Dedicated Numbers Row -->
+            <LinearLayout
+                android:id="@+id/row_numbers"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp" />
+
+            <!-- Row 1: Letters (QWERTY) -->
+            <LinearLayout
+                android:id="@+id/row_1"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp" />
+
+            <!-- Row 2: Letters (ASDF...) -->
+            <LinearLayout
+                android:id="@+id/row_2"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp" />
+
+            <!-- Row 3: Shift + ZXCVB... + Backspace -->
+            <LinearLayout
+                android:id="@+id/row_3"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp" />
+
+            <!-- Row 4: Symbols toggle + Comma + Space + Period + Enter -->
+            <LinearLayout
+                android:id="@+id/row_4"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:orientation="horizontal" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Floating Key Popup Preview (Positions directly above pressed key) -->
+    <TextView
+        android:id="@+id/key_popup_preview"
+        android:layout_width="56dp"
+        android:layout_height="62dp"
+        android:visibility="gone"
+        android:background="@drawable/bg_key_popup"
+        android:gravity="center"
+        android:textColor="@color/kb_accent"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        android:elevation="16dp" />
+
+</FrameLayout>

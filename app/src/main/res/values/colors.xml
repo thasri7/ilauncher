@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#2563EB</color>
+    <color name="primary_dark">#1D4ED8</color>
+    <color name="accent">#38BDF8</color>
+    
+    <!-- Keyboard Dark Slate & Cyber-Glass Theme -->
+    <color name="kb_bg">#0F1318</color>
+    <color name="kb_toolbar_bg">#151B22</color>
+    <color name="kb_key_bg">#232A33</color>
+    <color name="kb_key_top">#28313D</color>
+    <color name="kb_key_bottom">#1D242C</color>
+    <color name="kb_key_pressed">#354252</color>
+    <color name="kb_action_key_bg">#1B2129</color>
+    <color name="kb_action_key_top">#202731</color>
+    <color name="kb_action_key_bottom">#171C23</color>
+    <color name="kb_enter_key_bg">#2563EB</color>
+    <color name="kb_enter_key_pressed">#1D4ED8</color>
+    <color name="kb_enter_gradient_start">#38BDF8</color>
+    <color name="kb_enter_gradient_end">#1D4ED8</color>
+    <color name="kb_text_primary">#F8FAFC</color>
+    <color name="kb_text_secondary">#94A3B8</color>
+    <color name="kb_hint_color">#64748B</color>
+    <color name="kb_key_border">#384454</color>
+    <color name="kb_accent">#38BDF8</color>
+    <!-- Square Home Metro Colors -->
+    <color name="metro_bg">#0A0D14</color>
+    <color name="metro_tile_bg">#161D29</color>
+    <color name="metro_tile_border">#2A3649</color>
+    <color name="metro_tile_pressed">#243042</color>
+    <color name="metro_blue">#0078D7</color>
+    <color name="metro_cyan">#00B7C3</color>
+    <color name="metro_green">#107C41</color>
+    <color name="metro_orange">#D83B01</color>
+    <color name="metro_purple">#8764B8</color>
+    <color name="metro_magenta">#E3008C</color>
+    <color name="metro_yellow">#FFB900</color>
+    <color name="metro_glass">#221E293B</color>
+    <color name="metro_glass_stroke">#33475569</color>
+    <color name="metro_text_dim">#8E9BAE</color>
+</resources>

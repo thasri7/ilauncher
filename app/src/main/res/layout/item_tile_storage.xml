@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="130dp"
+    android:padding="3dp">
+
+    <LinearLayout
+        android:id="@+id/tile_storage_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_metro_tile"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="DEVICE HEALTH"
+            android:textColor="@color/metro_text_dim"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_storage_main"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="68%"
+            android:textColor="#FFFFFF"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <ProgressBar
+            android:id="@+id/pb_storage_bar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:max="100"
+            android:progress="68"
+            android:progressTint="@color/metro_purple" />
+
+        <TextView
+            android:id="@+id/tv_storage_detail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Storage Free: 120 GB"
+            android:textColor="@color/metro_text_dim"
+            android:textSize="11sp" />
+    </LinearLayout>
+</FrameLayout>

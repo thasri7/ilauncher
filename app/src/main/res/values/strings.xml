@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">iKeyboard</string>
+    <string name="keyboard_service_name">iKeyboard</string>
+    <string name="subtype_en_us">English (US)</string>
+    <string name="step_1_enable">1. Enable in Settings</string>
+    <string name="step_2_select">2. Switch Active Keyboard</string>
+    <string name="test_hint">Tap here to test typing with your keyboard...</string>
+    <string name="customization_title">Ergonomic &amp; Privacy Ready</string>
+</resources>

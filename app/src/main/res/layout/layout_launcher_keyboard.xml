@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ll_launcher_keyboard_board"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/kb_bg"
+    android:orientation="vertical"
+    android:paddingStart="3dp"
+    android:paddingTop="4dp"
+    android:paddingEnd="3dp"
+    android:paddingBottom="6dp">
+
+    <!-- Row 0: Numbers -->
+    <LinearLayout
+        android:id="@+id/row_kb_nums"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:orientation="horizontal"
+        android:weightSum="10" />
+
+    <!-- Row 1: QWERTY -->
+    <LinearLayout
+        android:id="@+id/row_kb_q"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="3dp"
+        android:orientation="horizontal"
+        android:weightSum="10" />
+
+    <!-- Row 2: ASDFGHJKL -->
+    <LinearLayout
+        android:id="@+id/row_kb_a"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="3dp"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:weightSum="9" />
+
+    <!-- Row 3: ZXCVBNM + Backspace -->
+    <LinearLayout
+        android:id="@+id/row_kb_z"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="3dp"
+        android:orientation="horizontal"
+        android:weightSum="9" />
+
+    <!-- Row 4: Math Symbols + Space + Enter -->
+    <LinearLayout
+        android:id="@+id/row_kb_bottom"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="3dp"
+        android:orientation="horizontal"
+        android:weightSum="10" />
+</LinearLayout>
