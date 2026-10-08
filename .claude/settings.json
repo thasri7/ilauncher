@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "maven-mcp": {
+      "source": {
+        "source": "github",
+        "repo": "kirich1409/maven-mcp"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "maven-mcp@maven-mcp": true
+  }
+}
