@@ -19,12 +19,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.speech.RecognizerIntent
 import android.text.SpannableString
-import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
-import android.text.style.SuperscriptSpan
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -263,25 +260,6 @@ class KeyboardIME : InputMethodService() {
         }
     }
 
-    /**
-     * Key face: the long-press symbol small in the top-right corner, the letter big below it,
-     * like most phone keyboards.
-     */
-    private fun buildKeyLabel(displayChar: String, secondary: String?): CharSequence {
-        if (secondary == null) return displayChar
-        val ssb = SpannableStringBuilder()
-        ssb.append(secondary)
-        val end = ssb.length
-        val hintColor = ContextCompat.getColor(this, R.color.kb_hint_color)
-        ssb.setSpan(RelativeSizeSpan(0.48f), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        ssb.setSpan(ForegroundColorSpan(hintColor), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        ssb.append("\n")
-        ssb.append(displayChar)
-        // Both lines centred: the symbol small above, the letter in the middle of the key.
-        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_CENTER), 0, ssb.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
-        return ssb
-    }
-
     // In-place case update without recreating any Views
     private fun updateKeyCase() {
         if (currentMode != KeyboardMode.LETTERS) return
@@ -290,7 +268,8 @@ class KeyboardIME : InputMethodService() {
         for ((btn, baseChar) in letterButtons) {
             val displayChar = if (isUpper) baseChar.uppercase() else baseChar.lowercase()
             val secondary = secondaryMap[baseChar]
-            btn.text = buildKeyLabel(displayChar, secondary)
+            btn.text = displayChar
+            (btn as? KeyButton)?.symbol = secondary
         }
     }
 
@@ -1364,11 +1343,11 @@ class KeyboardIME : InputMethodService() {
     }
 
     private fun createGlideKey(baseChar: String, displayChar: String, secondary: String?, weight: Float): Button {
-        val btn = Button(this).apply {
+        val btn = KeyButton(this, ContextCompat.getColor(this, R.color.kb_hint_color)).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
                 setMargins(2, 2, 2, 2)
             }
-            text = buildKeyLabel(displayChar, secondary)
+            text = displayChar
             val textColor = if (prefs.theme == "neon") Color.parseColor("#00F2FE") else ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary)
             setTextColor(textColor)
             textSize = prefs.fontSizeSp
@@ -1376,16 +1355,8 @@ class KeyboardIME : InputMethodService() {
             background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_key)
             isAllCaps = false
             tag = baseChar
-            if (secondary != null) {
-                // Two lines (symbol, letter) packed tight so both fit any key height.
-                includeFontPadding = false
-                setLineSpacing(0f, 0.86f)
-                gravity = Gravity.CENTER
-                // Lifted a touch so the letter, not the pair, sits in the middle of the key.
-                setPadding(0, 0, 0, (4 * resources.displayMetrics.density).toInt())
-            } else {
-                setPadding(0, 0, 0, 0)
-            }
+            gravity = Gravity.CENTER
+            symbol = secondary
         }
 
         var startX = 0f
