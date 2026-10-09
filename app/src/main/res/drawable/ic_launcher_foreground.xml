@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App icon: a little Start screen. A big live tile with a clock face, and smaller tiles
+     around it in fading white, all inside the adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Big tile -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M29.5,27h30.5a2.5,2.5 0 0,1 2.5,2.5v30.5a2.5,2.5 0 0,1 -2.5,2.5h-30.5a2.5,2.5 0 0,1 -2.5,-2.5v-30.5a2.5,2.5 0 0,1 2.5,-2.5z" />
+    <!-- Clock hands cut into the big tile, in the accent colour. -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M44.75,36.5v8.25l6,4"
+        android:strokeWidth="3.2"
+        android:strokeColor="#FF0050EF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M44.75,44.75m-11,0a11,11 0 1,1 22,0a11,11 0 1,1 -22,0"
+        android:strokeWidth="2.6"
+        android:strokeColor="#FF0050EF" />
+    <!-- Right column -->
+    <path android:fillColor="#D9FFFFFF" android:pathData="M67.5,27h11a2.5,2.5 0 0,1 2.5,2.5v11a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-11a2.5,2.5 0 0,1 2.5,-2.5z" />
+    <path android:fillColor="#99FFFFFF" android:pathData="M67.5,46.5h11a2.5,2.5 0 0,1 2.5,2.5v11a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-11a2.5,2.5 0 0,1 2.5,-2.5z" />
+    <!-- Bottom row: a wide tile and a small one -->
+    <path android:fillColor="#B3FFFFFF" android:pathData="M29.5,66h30.5a2.5,2.5 0 0,1 2.5,2.5v10a2.5,2.5 0 0,1 -2.5,2.5h-30.5a2.5,2.5 0 0,1 -2.5,-2.5v-10a2.5,2.5 0 0,1 2.5,-2.5z" />
+    <path android:fillColor="#F2FFFFFF" android:pathData="M67.5,66h11a2.5,2.5 0 0,1 2.5,2.5v10a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-10a2.5,2.5 0 0,1 2.5,-2.5z" />
+</vector>

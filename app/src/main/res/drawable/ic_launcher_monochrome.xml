@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed icon (Android 13+): the same tiles in one colour; the clock is cut out. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M29.5,27h30.5a2.5,2.5 0 0,1 2.5,2.5v30.5a2.5,2.5 0 0,1 -2.5,2.5h-30.5a2.5,2.5 0 0,1 -2.5,-2.5v-30.5a2.5,2.5 0 0,1 2.5,-2.5zM44.75,32.25a12.5,12.5 0 1,0 0.01,0zM44.75,35.05a9.7,9.7 0 1,1 -0.01,0zM43.15,36.5h3.2v7.4l5.3,3.5 -1.8,2.7 -6.7,-4.4z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M67.5,27h11a2.5,2.5 0 0,1 2.5,2.5v11a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-11a2.5,2.5 0 0,1 2.5,-2.5z M67.5,46.5h11a2.5,2.5 0 0,1 2.5,2.5v11a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-11a2.5,2.5 0 0,1 2.5,-2.5z M29.5,66h30.5a2.5,2.5 0 0,1 2.5,2.5v10a2.5,2.5 0 0,1 -2.5,2.5h-30.5a2.5,2.5 0 0,1 -2.5,-2.5v-10a2.5,2.5 0 0,1 2.5,-2.5z M67.5,66h11a2.5,2.5 0 0,1 2.5,2.5v10a2.5,2.5 0 0,1 -2.5,2.5h-11a2.5,2.5 0 0,1 -2.5,-2.5v-10a2.5,2.5 0 0,1 2.5,-2.5z" />
+</vector>

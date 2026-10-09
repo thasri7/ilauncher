@@ -3449,7 +3449,7 @@ class LauncherActivity : AppCompatActivity() {
         gridLayoutManager.gutterPx = ui.dp(prefs.gutterDp)
         PageTransformers.apply(pager, prefs.pageTransition)
         findViewById<ImageView>(R.id.iv_search_glyph).imageTintList = ColorStateList.valueOf(prefs.accentColorInt)
-        tileAdapter.notifyDataSetChanged()
+        tileAdapter.restyleAll()
         drawerAdapter.notifyDataSetChanged()
         refreshSuggestions(force = true)
     }
@@ -3486,7 +3486,11 @@ class LauncherActivity : AppCompatActivity() {
         }
         handler.removeCallbacks(liveTick)
         handler.postDelayed(liveTick, 2500)
-        if (tiles.any { it.type == TileType.TOGGLES }) toggles.start()
+        if (tiles.any { it.type == TileType.TOGGLES }) {
+            toggles.start()
+            // Back from a system panel (Wi-Fi, Bluetooth…): show what changed.
+            tileAdapter.onTogglesChanged()
+        }
         if (tiles.any { it.type == TileType.STEPS } && !needsActivityPermission()) stepCounter.start()
         tileAdapter.smartRotateStacks { stackPick(it) }
         scheduleNightstand()

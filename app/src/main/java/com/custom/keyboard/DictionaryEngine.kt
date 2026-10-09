@@ -15,7 +15,9 @@ class DictionaryEngine(context: Context) {
 
     private val userPrefs = context.getSharedPreferences("ikeys_user_dict", Context.MODE_PRIVATE)
     private val keyboardPrefs = KeyboardPreferences(context)
-    private val model = WordModel()
+    /** Replaced once the big list has loaded in the background. */
+    @Volatile
+    private var model = WordModel()
     private val main = Handler(Looper.getMainLooper())
     @Volatile
     var isLoaded = false
@@ -46,19 +48,23 @@ class DictionaryEngine(context: Context) {
         model.setPairs(loadPairs())
         val app = context.applicationContext
         Executors.newSingleThreadExecutor().execute {
-            val words = ArrayList<Pair<String, Long>>(20_000)
+            // Built entirely off the main thread, so opening the keyboard never stutters.
+            val full = WordModel()
             try {
                 app.assets.open("words_en.txt").bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         val tab = line.indexOf('\t')
-                        if (tab > 0) words.add(line.substring(0, tab) to (line.substring(tab + 1).toLongOrNull() ?: 1L))
+                        if (tab > 0) full.addWord(line.substring(0, tab), line.substring(tab + 1).toLongOrNull() ?: 1L)
                     }
                 }
             } catch (_: Exception) {
             }
+            full.finishLoading()
             main.post {
-                words.forEach { (w, c) -> model.addWord(w, c) }
-                model.finishLoading()
+                // Bring over anything learned while the list was loading.
+                full.setLearned(model.learnedWords())
+                full.setPairs(model.pairsSnapshot())
+                model = full
                 isLoaded = true
             }
         }

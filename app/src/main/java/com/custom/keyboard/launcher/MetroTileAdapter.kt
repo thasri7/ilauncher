@@ -312,7 +312,7 @@ class MetroTileAdapter(
         notifyTypes(PAYLOAD_TICK) {
             it.type == TileType.CLOCK_WEATHER || it.type == TileType.CALENDAR_BIG ||
                 it.type == TileType.BATTERY_STATUS || it.type == TileType.STORAGE_STATS ||
-                it.type == TileType.WORLD_CLOCK || it.type == TileType.COUNTDOWN || it.type == TileType.TOGGLES
+                it.type == TileType.WORLD_CLOCK || it.type == TileType.COUNTDOWN
         }
     }
 
@@ -428,6 +428,9 @@ class MetroTileAdapter(
             .forEach { pulsePending.add(it.id) }
         notifyTypes(PAYLOAD_NOTIFICATIONS) { it.id in pulsePending }
     }
+
+    /** Look changed (theme, colours, corners…): every tile restyles in place and morphs if resized. */
+    fun restyleAll() = notifyItemRangeChanged(0, itemCount, PAYLOAD_RESTYLE)
 
     fun refreshIcons() {
         shortcutIcons.clear()
@@ -1654,6 +1657,7 @@ class MetroTileAdapter(
         private val place: TextView = surface.findViewById(R.id.tv_weather_place)
         private val days: LinearLayout = surface.findViewById(R.id.ll_weather_days)
         private val backPlace: TextView = surface.findViewById(R.id.tv_weather_back_place)
+        private var daysKey = ""
 
         override fun hasBack(tile: TileItem) = !tile.size.isTiny && (weather()?.days?.size ?: 0) >= 2
 
@@ -1684,8 +1688,13 @@ class MetroTileAdapter(
             place.show(!small && prefs.showLabels)
             backPlace.text = place.text
 
+            // The forecast row only changes with a new report or size, not on every clock tick.
+            val shownDays = report?.days?.drop(1)?.take(if (tile.size.isLarge) 6 else if (roomy) 4 else 2).orEmpty()
+            val key = "${report?.fetchedAt}/${report?.unit}/${shownDays.size}"
+            if (key == daysKey) return
+            daysKey = key
             days.removeAllViews()
-            report?.days?.drop(1)?.take(if (tile.size.isLarge) 6 else if (roomy) 4 else 2)?.forEach { d ->
+            shownDays.forEach { d ->
                 days.addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
