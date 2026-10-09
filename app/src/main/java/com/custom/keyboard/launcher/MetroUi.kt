@@ -28,6 +28,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.custom.keyboard.R
+import com.custom.keyboard.models.TileSize
 
 /** The 20 Windows Phone / Windows 10 Mobile accent colours. */
 val METRO_ACCENTS: List<Pair<String, String>> = listOf(
@@ -239,6 +240,61 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
             isHorizontalScrollBarEnabled = false
             addView(row)
         }
+    }
+
+    /**
+     * Tile size picker: a 4×4 grid where tapping cell (c, r) picks a c×r tile. The cells the size
+     * covers light up in the accent colour; sizes not in [allowed] are dimmed and ignored.
+     */
+    fun sizeGrid(allowed: List<TileSize>, selected: TileSize, onPick: (TileSize) -> Unit): View {
+        val max = TileSize.MAX
+        var current = selected
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(10))
+        }
+        val label = text(selected.label, 13f, face = medium).apply { setPadding(0, 0, 0, dp(8)) }
+        box.addView(label)
+        val cells = Array(max) { arrayOfNulls<View>(max) }
+        fun paint() {
+            for (r in 0 until max) for (c in 0 until max) {
+                val cell = cells[r][c] ?: continue
+                val size = TileSize(c + 1, r + 1)
+                val covered = c < current.cols && r < current.rows
+                cell.background = GradientDrawable().apply {
+                    cornerRadius = dp(4).toFloat()
+                    setColor(if (covered) accent else 0x1AFFFFFF)
+                }
+                cell.alpha = if (size in allowed) 1f else 0.3f
+            }
+            label.text = current.label
+        }
+        for (r in 0 until max) {
+            val line = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            for (c in 0 until max) {
+                val size = TileSize(c + 1, r + 1)
+                val cell = View(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(34), 1f).apply {
+                        if (c < max - 1) marginEnd = dp(4)
+                    }
+                    contentDescription = size.label
+                    setOnClickListener {
+                        if (size in allowed && size != current) {
+                            current = size
+                            paint()
+                            onPick(size)
+                        }
+                    }
+                }
+                cells[r][c] = cell
+                line.addView(cell)
+            }
+            box.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                if (r < max - 1) bottomMargin = dp(4)
+            })
+        }
+        paint()
+        return box
     }
 
     /** Colour grid, five per row. A null entry is the "follow accent" swatch. */

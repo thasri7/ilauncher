@@ -26,8 +26,14 @@ class MetroGridPackerTest {
     }
 
     @Test
-    fun fourSmallTilesShareOneBlock() {
-        assertEquals(listOf("ABEE", "CDEE"), draw(4, small, small, small, small, medium))
+    fun smallTilesFillRowsLeftToRight() {
+        assertEquals(listOf("ABCD", "EE..", "EE.."), draw(4, small, small, small, small, medium))
+    }
+
+    @Test
+    fun anyWholeCellSizePacks() {
+        // 3×2, then 1×2 beside it, then 2×3 underneath.
+        assertEquals(listOf("AAAB", "AAAB", "CC..", "CC..", "CC.."), draw(4, Spec(3, 2), Spec(1, 2), Spec(2, 3)))
     }
 
     @Test
@@ -42,8 +48,8 @@ class MetroGridPackerTest {
     }
 
     @Test
-    fun smallTilesKeepFillingTheirBlockAfterABigTile() {
-        assertEquals(listOf("ABDDFG", "CEDDHI"), draw(6, small, small, small, medium, small, small, small, small, small))
+    fun smallTilesFillHolesAroundABiggerTile() {
+        assertEquals(listOf("ABCDDE", "FGHDDI"), draw(6, small, small, small, medium, small, small, small, small, small))
     }
 
     @Test

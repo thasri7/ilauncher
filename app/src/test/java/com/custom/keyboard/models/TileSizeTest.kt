@@ -27,13 +27,15 @@ class TileSizeTest {
         assertEquals(TileSize.WIDE, TileSize.grownFor(TileSize.MEDIUM, 30))
         assertEquals(TileSize.LARGE, TileSize.grownFor(TileSize.LARGE, 100))
         assertEquals(TileSize.WIDE, TileSize.grownFor(TileSize.WIDE, 0))
+        // A tall 1×3 tile never gets squashed into 2×2.
+        assertEquals(TileSize(1, 3), TileSize.grownFor(TileSize(1, 3), 10))
     }
 
     @Test
-    fun everySizeButSmallIsWholeBlocks() {
-        TileSize.entries.filter { it != TileSize.SMALL }.forEach {
-            assertEquals(0, it.cols % 2)
-            assertEquals(0, it.rows % 2)
-        }
+    fun everyWholeCellSizeFromOneToFour() {
+        assertEquals(16, TileSize.entries.size)
+        assertEquals(TileSize(3, 2), TileSize.valueOf("3x2"))
+        assertEquals(TileSize.WIDE, TileSize.valueOf("WIDE"))
+        assertEquals("1x4", TileSize(1, 4).name)
     }
 }

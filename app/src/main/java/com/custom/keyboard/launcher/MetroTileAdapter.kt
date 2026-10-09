@@ -587,7 +587,7 @@ class MetroTileAdapter(
         h.btnUnpin.show(selected)
         h.btnResize.show(selected && allowedSizes(tile).size > 1)
         h.btnMore.show(selected)
-        val button = ((if (tile.size == TileSize.SMALL && !isHeader) 22 else 30) * density).toInt()
+        val button = ((if (tile.size.isTiny && !isHeader) 22 else 30) * density).toInt()
         listOf(h.btnUnpin, h.btnResize, h.btnMore).forEach { b ->
             val lp = b.layoutParams
             if (lp.width != button) {
@@ -778,18 +778,13 @@ class MetroTileAdapter(
     /** Sizes a tile may take: widgets are limited to what they support. */
     fun allowedSizes(tile: TileItem): List<TileSize> = when (tile.type) {
         TileType.SECTION_HEADER -> emptyList()
-        TileType.WIDGET -> widgets.allowedSizes(tile.appWidgetId, cellPitch())
-        else -> TileSize.entries
+        TileType.WIDGET -> widgets.allowedSizes(tile.appWidgetId, cellPitch()).filter { it.cols <= prefs.columns }
+        else -> TileSize.entries.filter { it.cols <= prefs.columns }
     }
 
-    /** The allowed size closest to a footprint of [cols] × [rows] cells. */
+    /** The allowed size closest to a footprint of [cols] × [rows] whole cells. */
     private fun snapSize(cols: Int, rows: Int, allowed: List<TileSize>): TileSize {
-        val wanted = when {
-            cols <= 1 && rows <= 1 -> TileSize.SMALL
-            cols <= 2 && rows <= 2 -> TileSize.MEDIUM
-            rows <= 2 -> TileSize.WIDE
-            else -> TileSize.LARGE
-        }
+        val wanted = TileSize.of(cols, rows)
         if (wanted in allowed || allowed.isEmpty()) return wanted
         return allowed.minBy { abs(it.cols - cols) + abs(it.rows - rows) }
     }
@@ -931,7 +926,7 @@ class MetroTileAdapter(
         }
 
         override fun hasBack(tile: TileItem): Boolean {
-            if (tile.size == TileSize.SMALL || tile.shortcutId != null) return false
+            if (tile.size.isTiny || tile.shortcutId != null) return false
             val entry = NotificationHub.get(tile.packageName) ?: return false
             return entry.title.isNotEmpty() || entry.text.isNotEmpty()
         }
@@ -939,12 +934,14 @@ class MetroTileAdapter(
         private fun sizeIcon(tile: TileItem) {
             val h = tileHeightPx(tile)
             // Monochrome layers carry adaptive-icon padding, so they get a bigger box.
-            val factor = when (tile.size) {
-                TileSize.SMALL -> 0.5f
-                TileSize.LARGE -> 0.3f
+            // Icon follows the tile's shorter side, so 1×4 and 4×1 tiles get sensible icons too.
+            val side = minOf(h, tileWidthPx(tile))
+            val factor = when {
+                tile.size.isTiny -> 0.5f
+                tile.size.isLarge -> 0.3f
                 else -> 0.36f
             } * (if (themed) 1.9f else 1f)
-            icon.square(minOf(h * factor, h * 0.9f).toInt())
+            icon.square(minOf(side * factor, side * 0.9f).toInt())
         }
 
         override fun bindContent(tile: TileItem) {
@@ -961,7 +958,7 @@ class MetroTileAdapter(
             sizeIcon(tile)
 
             label.text = tile.title
-            label.show(prefs.showLabels && tile.size != TileSize.SMALL)
+            label.show(prefs.showLabels && !tile.size.isTiny)
 
             val entry = if (tile.shortcutId == null) NotificationHub.get(tile.packageName) else null
             val countText = entry?.count?.takeIf { it > 0 }?.let { if (it > 99) "99+" else it.toString() }.orEmpty()
@@ -969,7 +966,7 @@ class MetroTileAdapter(
             count.show(countText.isNotEmpty())
             backTitle.text = entry?.title.orEmpty()
             backText.text = entry?.text.orEmpty()
-            backText.maxLines = if (tile.size == TileSize.LARGE) 9 else 3
+            backText.maxLines = if (tile.size.isLarge) 9 else 3
             backName.text = tile.title
             backCount.text = countText
         }
@@ -991,18 +988,14 @@ class MetroTileAdapter(
         }
 
         override fun bindContent(tile: TileItem) {
-            val (rows, cols) = when (tile.size) {
-                TileSize.SMALL -> 2 to 2
-                TileSize.MEDIUM -> 2 to 2
-                TileSize.WIDE -> 2 to 4
-                TileSize.LARGE -> 3 to 3
-            }
+            // Mini icon grid that matches the folder's shape.
+            val cols = if (tile.size.cols == 1) 1 else tile.size.cols.coerceIn(2, 4)
+            val rows = if (tile.size.rows == 1) 1 else tile.size.rows.coerceIn(2, 3)
             val key = tile.children.joinToString(",") { it.id } + "/$rows/$cols/${cellPitch()}"
             if (boundKey != key) {
                 boundKey = key
                 grid.removeAllViews()
-                val h = tileHeightPx(tile)
-                val iconPx = (h * if (tile.size == TileSize.SMALL) 0.34f else 0.22f).toInt()
+                val iconPx = (minOf(tileHeightPx(tile) / rows, tileWidthPx(tile) / cols) * 0.5f).toInt()
                 val gap = (4 * density).toInt()
                 var index = 0
                 for (r in 0 until rows) {
@@ -1017,11 +1010,11 @@ class MetroTileAdapter(
                 }
             }
             label.text = tile.title
-            label.show(prefs.showLabels && tile.size != TileSize.SMALL)
+            label.show(prefs.showLabels && !tile.size.isTiny)
             val unread = tile.children.sumOf { NotificationHub.get(it.packageName)?.count ?: 0 }
             count.text = if (unread > 0) unread.toString() else ""
             count.show(unread > 0)
-            chevron.show(tile.size != TileSize.SMALL)
+            chevron.show(!tile.size.isTiny)
         }
     }
 
@@ -1112,26 +1105,21 @@ class MetroTileAdapter(
         private val backValue: TextView = surface.findViewById(R.id.tv_clock_back_value)
         private val backTitle: TextView = surface.findViewById(R.id.tv_clock_back_title)
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny
 
         override fun bindContent(tile: TileItem) {
             val now = Date()
             val is24h = DateFormat.is24HourFormat(context)
             time.text = DateFormat.format(if (is24h) "H:mm" else "h:mm", now)
             ampm.text = if (is24h) "" else DateFormat.format("a", now).toString().lowercase(Locale.getDefault())
-            date.text = DateFormat.format(if (tile.size == TileSize.MEDIUM) "EEE d MMM" else "EEEE, d MMMM", now)
+            date.text = DateFormat.format(if ((!tile.size.isTiny && !tile.size.isRoomy)) "EEE d MMM" else "EEEE, d MMMM", now)
             val h = tileHeightPx(tile)
             // Square tiles are width-bound, wide ones height-bound.
             time.sizePx(
-                h * when (tile.size) {
-                    TileSize.SMALL -> 0.3f
-                    TileSize.MEDIUM -> 0.26f
-                    TileSize.WIDE -> 0.34f
-                    TileSize.LARGE -> 0.24f
-                }
+                minOf(h * 0.34f, tileWidthPx(tile) * if (tile.size.isTiny) 0.3f else 0.2f)
             )
-            ampm.show(tile.size != TileSize.SMALL && !is24h)
-            date.show(tile.size != TileSize.SMALL)
+            ampm.show(!tile.size.isTiny && !is24h)
+            date.show(!tile.size.isTiny)
 
             val next = context.getSystemService(AlarmManager::class.java)?.nextAlarmClock
             if (next != null) {
@@ -1151,7 +1139,7 @@ class MetroTileAdapter(
         private val month: TextView = surface.findViewById(R.id.tv_cal_month)
         private val detail: TextView = surface.findViewById(R.id.tv_cal_detail)
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny
 
         private fun whenText(e: AgendaProvider.Event): String {
             val today = Calendar.getInstance()
@@ -1164,15 +1152,15 @@ class MetroTileAdapter(
         override fun bindContent(tile: TileItem) {
             val cal = Calendar.getInstance()
             val now = cal.time
-            weekday.text = DateFormat.format(if (tile.size == TileSize.SMALL) "EEE" else "EEEE", now)
+            weekday.text = DateFormat.format(if (tile.size.isTiny) "EEE" else "EEEE", now)
             day.text = cal.get(Calendar.DAY_OF_MONTH).toString()
-            day.sizePx(tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.45f else 0.42f)
-            weekday.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (tile.size == TileSize.SMALL) 11f else 14f)
+            day.sizePx(tileHeightPx(tile) * if (tile.size.isTiny) 0.45f else 0.42f)
+            weekday.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (tile.size.isTiny) 11f else 14f)
 
             val upcoming = agenda
-            val roomy = tile.size == TileSize.WIDE || tile.size == TileSize.LARGE
+            val roomy = tile.size.isRoomy
             events.show(roomy && upcoming.isNotEmpty())
-            events.text = upcoming.take(if (tile.size == TileSize.LARGE) 5 else 2)
+            events.text = upcoming.take(if (tile.size.isLarge) 5 else 2)
                 .joinToString("\n") { "${whenText(it)}  ${it.title}" }
 
             val next = upcoming.firstOrNull()
@@ -1194,7 +1182,7 @@ class MetroTileAdapter(
         private val backTitle: TextView = surface.findViewById(R.id.tv_battery_back_title)
         private val backDetail: TextView = surface.findViewById(R.id.tv_battery_back_detail)
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny
 
         override fun bindContent(tile: TileItem) {
             val status = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
@@ -1207,7 +1195,7 @@ class MetroTileAdapter(
                 } ?: 0
             val plugged = (status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
             val state = status?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val small = tile.size == TileSize.SMALL
+            val small = tile.size.isTiny
             val h = tileHeightPx(tile)
 
             glyph.charging = plugged
@@ -1257,12 +1245,12 @@ class MetroTileAdapter(
 
         override val peeks = true
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny
 
         private fun gb(bytes: Long) = String.format(Locale.getDefault(), "%.1f GB", bytes / 1_073_741_824.0)
 
         override fun bindContent(tile: TileItem) {
-            val small = tile.size == TileSize.SMALL
+            val small = tile.size.isTiny
             val textPx = tileHeightPx(tile) * if (small) 0.2f else 0.13f
             try {
                 val stat = StatFs(Environment.getDataDirectory().path)
@@ -1310,8 +1298,8 @@ class MetroTileAdapter(
             val access = NotificationHub.isAccessGranted(context)
             val cover = media.art
             art.setImageBitmap(cover)
-            art.show(cover != null && tile.size != TileSize.SMALL)
-            scrim.show(cover != null && tile.size != TileSize.SMALL)
+            art.show(cover != null && !tile.size.isTiny)
+            scrim.show(cover != null && !tile.size.isTiny)
             when {
                 media.hasSession -> {
                     title.text = media.title.ifEmpty { "Now playing" }
@@ -1327,10 +1315,10 @@ class MetroTileAdapter(
                 }
             }
             playPause.setImageResource(if (media.isPlaying) R.drawable.ic_m_pause else R.drawable.ic_m_play)
-            val small = tile.size == TileSize.SMALL
+            val small = tile.size.isTiny
             title.show(!small)
             artist.show(!small)
-            artist.maxLines = if (tile.size == TileSize.MEDIUM) 1 else 2
+            artist.maxLines = if ((!tile.size.isTiny && !tile.size.isRoomy)) 1 else 2
             iconView.show(!small || !media.hasSession)
             controls.show(!small || media.hasSession)
             controls.findViewById<View>(R.id.btn_media_prev).show(!small)
@@ -1346,15 +1334,15 @@ class MetroTileAdapter(
         private val backName: TextView = surface.findViewById(R.id.tv_contact_back_name)
         private val backPhone: TextView = surface.findViewById(R.id.tv_contact_back_phone)
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL && tile.contactPhone.isNotEmpty()
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny && tile.contactPhone.isNotEmpty()
 
         override fun bindContent(tile: TileItem) {
             val initials = tile.title.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
                 .take(2).joinToString("") { it.take(1).uppercase() }
             avatar.text = initials.ifEmpty { "?" }
-            avatar.sizePx(tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.4f else 0.3f)
+            avatar.sizePx(tileHeightPx(tile) * if (tile.size.isTiny) 0.4f else 0.3f)
             name.text = tile.title
-            name.show(prefs.showLabels && tile.size != TileSize.SMALL)
+            name.show(prefs.showLabels && !tile.size.isTiny)
             backName.text = tile.title
             backPhone.text = tile.contactPhone
 
@@ -1413,7 +1401,7 @@ class MetroTileAdapter(
             }
             empty.show(files.isEmpty())
             label.text = tile.title
-            label.show(prefs.showLabels && tile.size != TileSize.SMALL && files.isNotEmpty())
+            label.show(prefs.showLabels && !tile.size.isTiny && files.isNotEmpty())
         }
     }
 
@@ -1446,17 +1434,17 @@ class MetroTileAdapter(
         private val days: LinearLayout = surface.findViewById(R.id.ll_weather_days)
         private val backPlace: TextView = surface.findViewById(R.id.tv_weather_back_place)
 
-        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL && (weather()?.days?.size ?: 0) >= 2
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny && (weather()?.days?.size ?: 0) >= 2
 
         private fun deg(v: Double) = "${Math.round(v)}°"
 
         override fun bindContent(tile: TileItem) {
             val report = weather()
             val h = tileHeightPx(tile)
-            val small = tile.size == TileSize.SMALL
-            val roomy = tile.size == TileSize.WIDE || tile.size == TileSize.LARGE
+            val small = tile.size.isTiny
+            val roomy = tile.size.isRoomy
             icon.square((h * if (small) 0.42f else 0.3f).toInt())
-            temp.sizePx(h * if (small) 0.26f else if (tile.size == TileSize.MEDIUM) 0.24f else 0.3f)
+            temp.sizePx(h * if (small) 0.26f else if ((!tile.size.isTiny && !tile.size.isRoomy)) 0.24f else 0.3f)
             if (report == null) {
                 icon.setImageResource(R.drawable.ic_m_sun)
                 temp.text = if (small) "" else "—"
@@ -1510,8 +1498,8 @@ class MetroTileAdapter(
         private val label: TextView = surface.findViewById(R.id.tv_search_label)
 
         override fun bindContent(tile: TileItem) {
-            hint.show(tile.size == TileSize.WIDE || tile.size == TileSize.LARGE)
-            label.show(tile.size != TileSize.SMALL && prefs.showLabels)
+            hint.show(tile.size.isRoomy)
+            label.show(!tile.size.isTiny && prefs.showLabels)
         }
     }
 
@@ -1527,11 +1515,11 @@ class MetroTileAdapter(
                     if (tile.type == TileType.KEYBOARD_SETTINGS) R.drawable.ic_m_keyboard else R.drawable.ic_m_settings
                 )
             )
-            iconView.square((tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.45f else 0.3f).toInt())
+            iconView.square((tileHeightPx(tile) * if (tile.size.isTiny) 0.45f else 0.3f).toInt())
             title.text = tile.title
-            title.show(tile.size != TileSize.SMALL && prefs.showLabels)
+            title.show(!tile.size.isTiny && prefs.showLabels)
             subtitle.text = tile.customSubtitle
-            subtitle.show(tile.customSubtitle.isNotEmpty() && (tile.size == TileSize.WIDE || tile.size == TileSize.LARGE))
+            subtitle.show(tile.customSubtitle.isNotEmpty() && (tile.size.isRoomy))
         }
     }
 

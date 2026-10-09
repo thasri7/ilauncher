@@ -1726,12 +1726,10 @@ class LauncherActivity : AppCompatActivity() {
         if (!isHeader) {
             card.addView(ui.sectionTitle("Size"))
             val sizes = tileAdapter.allowedSizes(tile)
-            card.addView(ui.chips(sizes.map { it.label }, sizes.indexOf(tile.size)) { i ->
-                if (tile.size != sizes[i]) {
-                    tile.size = sizes[i]
-                    tile.sizeLocked = true
-                    restyle(tile)
-                }
+            card.addView(ui.sizeGrid(sizes, tile.size) { picked ->
+                tile.size = picked
+                tile.sizeLocked = true
+                restyle(tile)
             })
             if (tile.type != TileType.WIDGET) {
                 card.addView(ui.sectionTitle("Colour"))
@@ -1872,7 +1870,7 @@ class LauncherActivity : AppCompatActivity() {
         val card = ui.card()
         card.addView(ui.header(app.name))
         card.addView(ui.sectionTitle("Pin to Start"))
-        val sizes = TileSize.entries
+        val sizes = listOf(TileSize.SMALL, TileSize.MEDIUM, TileSize.WIDE, TileSize.LARGE).filter { it.cols <= prefs.columns }
         card.addView(ui.chips(sizes.map { it.label }, -1) { i ->
             metroOverlay.dismiss()
             pinApp(app, sizes[i])

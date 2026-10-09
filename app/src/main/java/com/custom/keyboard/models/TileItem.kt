@@ -22,32 +22,73 @@ enum class TileType {
 }
 
 /**
- * Windows 10 Mobile tile sizes, in grid cells (columns × rows). Every size except SMALL is a
- * whole number of 2×2 blocks, which is what lets the grid pack four small tiles into one block.
+ * A tile's size in whole grid cells: any width and height from 1 to 4 (1×1 up to 4×4).
+ * Small, Medium, Wide and Large are the classic Windows 10 Mobile sizes.
  */
-enum class TileSize(val cols: Int, val rows: Int, val label: String) {
-    SMALL(1, 1, "Small"),
-    MEDIUM(2, 2, "Medium"),
-    WIDE(4, 2, "Wide"),
-    LARGE(4, 4, "Large");
+data class TileSize(val cols: Int, val rows: Int) {
+    init {
+        require(cols in 1..MAX && rows in 1..MAX) { "tile size $cols×$rows" }
+    }
 
-    /** The resize-button cycle from Windows 10 Mobile: medium → small → wide → large → medium. */
+    /** Stored form, e.g. "3x2". */
+    val name: String get() = "${cols}x$rows"
+
+    val label: String get() = "$cols × $rows"
+
+    val area: Int get() = cols * rows
+
+    /** One cell thick in either direction: room for an icon or a single line only. */
+    val isTiny: Boolean get() = cols == 1 || rows == 1
+
+    /** At least 3 cells wide and more than one row: room for extra detail. */
+    val isRoomy: Boolean get() = cols >= 3 && rows >= 2
+
+    val isLarge: Boolean get() = cols >= 3 && rows >= 3
+
+    /** Tap on the resize button: the classic W10M cycle, then the closest classic size. */
     fun nextInCycle(): TileSize = when (this) {
         MEDIUM -> SMALL
         SMALL -> WIDE
         WIDE -> LARGE
         LARGE -> MEDIUM
+        else -> MEDIUM
     }
 
     companion object {
+        const val MAX = 4
+        val SMALL = TileSize(1, 1)
+        val MEDIUM = TileSize(2, 2)
+        val WIDE = TileSize(4, 2)
+        val LARGE = TileSize(4, 4)
+
+        /** Every size, smallest first. */
+        val entries: List<TileSize> = (1..MAX).flatMap { r -> (1..MAX).map { c -> TileSize(c, r) } }.sortedBy { it.area }
+
+        /** Parses "3x2", and the old names "SMALL", "MEDIUM", "WIDE", "LARGE". */
+        fun valueOf(name: String): TileSize = when (name.uppercase()) {
+            "SMALL" -> SMALL
+            "MEDIUM" -> MEDIUM
+            "WIDE" -> WIDE
+            "LARGE" -> LARGE
+            else -> {
+                val parts = name.lowercase().split('x').map { it.trim().toInt() }
+                TileSize(parts[0].coerceIn(1, MAX), parts[1].coerceIn(1, MAX))
+            }
+        }
+
+        fun of(cols: Int, rows: Int) = TileSize(cols.coerceIn(1, MAX), rows.coerceIn(1, MAX))
+
         /**
-         * Smart auto-grow: the size an app tile earns from how often it is opened. Small starts
-         * growing at 5 launches and medium at 30; wide is the largest auto size.
+         * Smart auto-grow: the size an app tile earns from how often it is opened. Below medium it
+         * grows to medium at 5 launches; medium grows to wide at 30. Never shrinks.
          */
-        fun grownFor(current: TileSize, launches: Int): TileSize = when {
-            current == SMALL && launches >= 5 -> if (launches >= 30) WIDE else MEDIUM
-            current == MEDIUM && launches >= 30 -> WIDE
-            else -> current
+        fun grownFor(current: TileSize, launches: Int): TileSize {
+            val earned = when {
+                launches >= 30 -> WIDE
+                launches >= 5 -> MEDIUM
+                else -> current
+            }
+            return if (earned.area > current.area && earned.cols >= current.cols && earned.rows >= current.rows) earned else current
         }
 
         /**
