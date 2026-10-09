@@ -552,6 +552,16 @@ class KeyboardIME : InputMethodService() {
                 }
             }
             "translate" -> showTranslateDrawer()
+            "punct" -> listOf("?", "!", "'", "\"", ":", ";", "-", "…", "@", "#", "&", "(", ")", "/").forEach { mark ->
+                featureDrawerContainer.addView(chip(mark) {
+                    commitCharacter(mark)
+                    finishWordCommit()
+                    closeFeatureDrawer()
+                }.apply {
+                    textSize = 16f
+                    setPadding(dp(14), 0, dp(14), 0)
+                })
+            }
             "apps" -> {
                 val allApps = appLauncher.getAllApps()
                 if (allApps.isEmpty()) featureDrawerContainer.addView(drawerNote("No apps found"))
@@ -1305,6 +1315,12 @@ class KeyboardIME : InputMethodService() {
             commitCharacter(",")
             finishWordCommit()
         }
+        // Hold comma for keyboard settings, like Gboard.
+        commaKey.setOnLongClickListener {
+            feedback(it)
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        }
         row4.addView(commaKey)
 
         val spaceKey = createSpacebarKey(weight = if (hasSecondLanguage) 3.5f else 4.8f)
@@ -1313,6 +1329,12 @@ class KeyboardIME : InputMethodService() {
         val periodKey = createKey(".", weight = 0.8f) {
             commitCharacter(".")
             finishWordCommit()
+        }
+        // Hold full stop for more punctuation in the strip above the keys.
+        periodKey.setOnLongClickListener {
+            feedback(it)
+            showFeatureDrawer("punct")
+            true
         }
         row4.addView(periodKey)
 
@@ -1523,13 +1545,22 @@ class KeyboardIME : InputMethodService() {
         var startX = 0f
         var totalMovedX = 0f
         val swipeThreshold = 35f
+        var pickerShown = false
+        // Hold the space bar to switch to another keyboard, like most keyboards.
+        val pickKeyboard = Runnable {
+            pickerShown = true
+            feedback(btn)
+            getSystemService(InputMethodManager::class.java)?.showInputMethodPicker()
+        }
 
         btn.setOnTouchListener { v, event ->
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = event.x
                     totalMovedX = 0f
+                    pickerShown = false
                     feedback(v)
+                    handler.postDelayed(pickKeyboard, 650)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -1543,13 +1574,19 @@ class KeyboardIME : InputMethodService() {
                         feedback(v)
                         totalMovedX += deltaX
                         startX = event.x
+                        handler.removeCallbacks(pickKeyboard)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (abs(totalMovedX) < swipeThreshold) {
+                    handler.removeCallbacks(pickKeyboard)
+                    if (abs(totalMovedX) < swipeThreshold && !pickerShown) {
                         handleSpacebarCommit()
                     }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(pickKeyboard)
                     true
                 }
                 else -> false
@@ -1634,21 +1671,34 @@ class KeyboardIME : InputMethodService() {
         }
 
         var startX = 0f
+        var downAt = 0L
         btn.setOnTouchListener { v, event ->
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = event.x
+                    downAt = SystemClock.uptimeMillis()
                     feedback(v)
                     deleteChar()
+                    // Hold to keep deleting: letters, faster and faster, then whole words, until
+                    // the field is empty or you let go.
                     backspaceRunnable = object : Runnable {
                         override fun run() {
-                            deleteChar()
-                            handler.postDelayed(this, 50)
+                            val held = SystemClock.uptimeMillis() - downAt
+                            val before = currentInputConnection?.getTextBeforeCursor(1, 0)
+                            val hasSelection = !currentInputConnection?.getSelectedText(0).isNullOrEmpty()
+                            if (before.isNullOrEmpty() && !hasSelection) return
+                            if (held > 1600) deletePreviousWord() else deleteChar()
+                            handler.postDelayed(this, when {
+                                held > 1600 -> 120L
+                                held > 900 -> 30L
+                                else -> 65L
+                            })
                         }
                     }
-                    handler.postDelayed(backspaceRunnable!!, 350)
+                    handler.postDelayed(backspaceRunnable!!, 380)
                     true
                 }
+                MotionEvent.ACTION_MOVE -> true
                 MotionEvent.ACTION_UP -> {
                     backspaceRunnable?.let { handler.removeCallbacks(it) }
                     backspaceRunnable = null
@@ -1694,9 +1744,10 @@ class KeyboardIME : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
                 setMargins(2, 2, 2, 2)
             }
-            text = "↵"
+            // Shows what Enter will do in this field: send, search, go, next, done or new line.
+            text = enterLabel()
             setTextColor(Color.WHITE)
-            textSize = 22f
+            textSize = if (text.length > 1) 15f else 22f
             typeface = getSelectedTypeface()
             background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_key_enter)
             setPadding(0, 0, 0, 0)
@@ -1744,9 +1795,35 @@ class KeyboardIME : InputMethodService() {
         }
     }
 
+    /** The action Enter performs here, or null for a plain new line. */
+    private fun enterAction(): Int? {
+        val info = currentInputEditorInfo ?: return null
+        // Multi-line fields that ask for it (chats, notes) get a new line instead of the action.
+        if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return null
+        return when (val action = info.imeOptions and EditorInfo.IME_MASK_ACTION) {
+            EditorInfo.IME_ACTION_DONE, EditorInfo.IME_ACTION_GO, EditorInfo.IME_ACTION_SEARCH,
+            EditorInfo.IME_ACTION_SEND, EditorInfo.IME_ACTION_NEXT, EditorInfo.IME_ACTION_PREVIOUS -> action
+            else -> null
+        }
+    }
+
+    private fun enterLabel(): String = when (enterAction()) {
+        EditorInfo.IME_ACTION_SEARCH -> "⌕"
+        EditorInfo.IME_ACTION_SEND -> "➤"
+        EditorInfo.IME_ACTION_GO -> "Go"
+        EditorInfo.IME_ACTION_NEXT -> "Next"
+        EditorInfo.IME_ACTION_PREVIOUS -> "Prev"
+        EditorInfo.IME_ACTION_DONE -> "✓"
+        else -> "↵"
+    }
+
     private fun handleEnter() {
         val ic = currentInputConnection ?: return
         val info = currentInputEditorInfo ?: run {
+            ic.commitText("\n", 1)
+            return
+        }
+        if (enterAction() == null) {
             ic.commitText("\n", 1)
             return
         }
@@ -1758,6 +1835,7 @@ class KeyboardIME : InputMethodService() {
             EditorInfo.IME_ACTION_SEARCH -> ic.performEditorAction(EditorInfo.IME_ACTION_SEARCH)
             EditorInfo.IME_ACTION_SEND -> ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
             EditorInfo.IME_ACTION_NEXT -> ic.performEditorAction(EditorInfo.IME_ACTION_NEXT)
+            EditorInfo.IME_ACTION_PREVIOUS -> ic.performEditorAction(EditorInfo.IME_ACTION_PREVIOUS)
             else -> ic.commitText("\n", 1)
         }
     }

@@ -1047,6 +1047,15 @@ class LauncherActivity : AppCompatActivity() {
             }
         })
         clear.setOnClickListener { search.setText("") }
+        // Keyboard Go / Search opens the best match.
+        search.setOnEditorActionListener { v, _, _ ->
+            if (drawerQuery.isNotEmpty()) rankApps(drawerQuery).firstOrNull()?.let { app ->
+                hideKeyboard(v)
+                launchApp(app.packageName, null)
+                search.setText("")
+            }
+            true
+        }
         refreshDrawer()
     }
 
