@@ -76,6 +76,8 @@ import com.custom.keyboard.launcher.MetroThemes
 import com.custom.keyboard.launcher.QuickToggles
 import com.custom.keyboard.launcher.StartArranger
 import com.custom.keyboard.launcher.StepCounter
+import com.custom.keyboard.launcher.TextAppsPage
+import com.custom.keyboard.launcher.TextCloud
 import com.custom.keyboard.launcher.UsageReader
 import com.custom.keyboard.launcher.WorldClocks
 import com.custom.keyboard.launcher.AppDrawerAdapter
@@ -246,6 +248,7 @@ class LauncherActivity : AppCompatActivity() {
             appHelper.reload()
             allApps = appHelper.getAllApps()
             refreshDrawer()
+            refreshTextPage()
             tileAdapter.refreshIcons()
         }
     }
@@ -517,6 +520,7 @@ class LauncherActivity : AppCompatActivity() {
             editBar.requestLayout()
             rvTiles?.let { applyTilesPadding(it) }
             rvDrawer?.let { it.setPadding(0, 0, 0, bars.bottom + ui.dp(24)) }
+            textPage?.setBottomInset(bars.bottom)
             WindowInsetsCompat.CONSUMED
         }
     }
@@ -606,8 +610,9 @@ class LauncherActivity : AppCompatActivity() {
         pager.offscreenPageLimit = 1
         pager.adapter = LauncherPagerAdapter(
             onTilesPageReady = { rv -> setupTilesPage(rv) },
-            onDrawerPageReady = { page -> setupDrawerPage(page) }
-        )
+            onDrawerPageReady = { page -> setupDrawerPage(page) },
+            textPage = { obtainTextPage() }
+        ).apply { textPageShown = prefs.textPageEnabled }
         tvTitle.text = spaceName()
         tvTitle.setOnClickListener { if (pager.currentItem == LauncherPagerAdapter.PAGE_TILES) showOverview() else showJumpList() }
         // Swipe right on Start (there is no page to its left): next space, or the chosen action.
@@ -637,13 +642,22 @@ class LauncherActivity : AppCompatActivity() {
         })
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
-                wallpaperX = (position + positionOffset).coerceIn(0f, 1f)
+                val last = ((pager.adapter?.itemCount ?: 2) - 1).coerceAtLeast(1)
+                wallpaperX = ((position + positionOffset) / last).coerceIn(0f, 1f)
                 updateWallpaperOffsets()
             }
 
             override fun onPageSelected(position: Int) {
                 val onTiles = position == LauncherPagerAdapter.PAGE_TILES
-                swapTitle(if (onTiles) spaceName() else "all apps")
+                swapTitle(when (position) {
+                    LauncherPagerAdapter.PAGE_TILES -> spaceName()
+                    LauncherPagerAdapter.PAGE_TEXT -> "apps"
+                    else -> "all apps"
+                })
+                if (position != LauncherPagerAdapter.PAGE_TEXT) textPage?.let { page ->
+                    hideKeyboard(page)
+                    page.clearSearch()
+                }
                 btnTogglePage.setImageResource(if (onTiles) R.drawable.ic_m_apps else R.drawable.ic_m_back)
                 btnTogglePage.contentDescription = if (onTiles) "All apps" else "Back to Start"
                 if (onTiles) {
@@ -651,6 +665,54 @@ class LauncherActivity : AppCompatActivity() {
                     if (drawerQuery.isNotEmpty()) etDrawerSearch?.setText("")
                 }
             }
+        })
+    }
+
+    // ── Text page (AP15 style) ──────────────────────────────────────────────────────────
+
+    private var textPage: TextAppsPage? = null
+
+    private fun obtainTextPage(): TextAppsPage? {
+        if (!prefs.textPageEnabled) return null
+        val page = textPage ?: TextAppsPage(
+            this, prefs,
+            onOpen = { app, view -> launchApp(app.packageName, view) },
+            onMenu = { app, view -> showDrawerAppMenu(app, view) }
+        ).also { textPage = it }
+        page.setBottomInset(systemInsets.bottom)
+        refreshTextPage()
+        return page
+    }
+
+    /** Re-sizes and re-colours every name from current use and tile sizes. */
+    private fun refreshTextPage() {
+        val page = textPage ?: return
+        if (!prefs.textPageEnabled) return
+        val apps = visibleApps()
+        val heat = prefs.heat()
+        val tileLevels = HashMap<String, Int>()
+        tiles.filter { it.type == TileType.APP_SHORTCUT && it.shortcutId == null }.forEach { t ->
+            val pkg = t.packageName ?: return@forEach
+            tileLevels[pkg] = maxOf(tileLevels[pkg] ?: 0, TextCloud.levelForTile(t.size.cols, t.size.rows))
+        }
+        val levels = TextCloud.levels(apps.map { it.packageName }, heat) { tileLevels[it] ?: 0 }
+        val ordered = when (prefs.textOrder) {
+            "use" -> apps.sortedWith(compareByDescending<AppLauncherHelper.AppEntry> { heat[it.packageName] ?: 0.0 }.thenBy { it.name.lowercase() })
+            "size" -> apps.sortedWith(compareByDescending<AppLauncherHelper.AppEntry> { levels[it.packageName] ?: 0 }.thenBy { it.name.lowercase() })
+            else -> apps.sortedBy { it.name.lowercase() }
+        }
+        val dims = intArrayOf(0x8CFFFFFF.toInt(), 0xB3FFFFFF.toInt(), 0xD9FFFFFF.toInt(), Color.WHITE, Color.WHITE)
+        page.submit(ordered.map { app ->
+            val level = levels[app.packageName] ?: 0
+            val color = when (prefs.textColor) {
+                "white" -> dims[level]
+                "app" -> icons.tileColor(app.packageName)?.let { c ->
+                    // Lifted towards white so names stay readable on the wallpaper.
+                    Color.rgb((Color.red(c) + 255) / 2, (Color.green(c) + 255) / 2, (Color.blue(c) + 255) / 2)
+                } ?: dims[level]
+                else -> if (level >= 3) ui.accentText else dims[level]
+            }
+            TextAppsPage.Item(app, level, color)
         })
     }
 
@@ -1773,6 +1835,7 @@ class LauncherActivity : AppCompatActivity() {
     private fun setHidden(packageName: String, hidden: Boolean) {
         prefs.hiddenApps = if (hidden) prefs.hiddenApps + packageName else prefs.hiddenApps - packageName
         refreshDrawer()
+        refreshTextPage()
         refreshSuggestions(force = true)
         toast(if (hidden) "Moved to Private apps" else "Back in All apps")
     }
@@ -2563,6 +2626,19 @@ class LauncherActivity : AppCompatActivity() {
         override val spaceCount: Int get() = prefs.spaces().size
         override val usageAccess: Boolean get() = UsageReader.hasAccess(this@LauncherActivity)
         override val activityAccess: Boolean get() = !needsActivityPermission()
+        override fun applyTextPageSettings() {
+            (pager.adapter as? LauncherPagerAdapter)?.let { adapter ->
+                if (!prefs.textPageEnabled && pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) pager.setCurrentItem(LauncherPagerAdapter.PAGE_DRAWER, false)
+                adapter.textPageShown = prefs.textPageEnabled
+            }
+            if (!prefs.textPageEnabled) textPage = null
+            refreshTextPage()
+        }
+        override fun resetTextSizes() {
+            prefs.resetHeat()
+            refreshTextPage()
+            toast("Name sizes reset; they grow again as you use apps")
+        }
         override fun applyDrawerSettings() {
             rvDrawer?.let { applyDrawerLayout(it) }
             refreshDrawer()
@@ -3467,6 +3543,7 @@ class LauncherActivity : AppCompatActivity() {
         PageTransformers.apply(pager, prefs.pageTransition)
         findViewById<ImageView>(R.id.iv_search_glyph).imageTintList = ColorStateList.valueOf(prefs.accentColorInt)
         tileAdapter.restyleAll()
+        refreshTextPage()
         drawerAdapter.notifyDataSetChanged()
         refreshSuggestions(force = true)
     }
@@ -3495,6 +3572,7 @@ class LauncherActivity : AppCompatActivity() {
         refreshAgenda()
         refreshWeather(force = false)
         refreshSuggestions()
+        refreshTextPage()
         applyWallpaperAccent()
         prefs.takePendingPins().forEach { pinShortcut(it.packageName, it.shortcutId, it.label) }
         if (pendingRestyles.isNotEmpty()) {

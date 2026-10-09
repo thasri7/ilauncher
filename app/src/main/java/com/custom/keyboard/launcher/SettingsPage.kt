@@ -39,6 +39,8 @@ class SettingsPage(
         fun applyWallpaperAccent()
         fun showPrivateApps()
         fun applyDrawerSettings()
+        fun applyTextPageSettings()
+        fun resetTextSizes()
         fun applySystemBars()
         fun showOverview()
         fun showArrange()
@@ -72,6 +74,7 @@ class SettingsPage(
         Section("colours", R.drawable.ic_m_palette, "Colours & icons", { if (prefs.accentFromWallpaper) "Matching wallpaper · ${host.iconPackLabel}" else host.iconPackLabel }),
         Section("tiles", R.drawable.ic_m_live, "Live tiles & motion", { "Animations, tilt, live tiles, auto-grow" }),
         Section("apps", R.drawable.ic_m_search, "All apps & search", { "${if (prefs.drawerStyle == "grid") "Grid" else "List"} · private apps · ${engineName()}" }),
+        Section("text", R.drawable.ic_m_title, "Text page", { if (prefs.textPageEnabled) "On · app names sized by use, swipe past All apps" else "Off" }),
         Section("gestures", R.drawable.ic_m_swipe, "Gestures", { "Swipe, double-tap, pinch, two fingers" }),
         Section("battery", R.drawable.ic_m_leaf, "Battery & Glance", { if (prefs.nightstand) "Nightstand on" else if (prefs.batterySaverPause) "Rests in battery saver" else "Always live" }),
         Section("weather", R.drawable.ic_m_sun, "Weather", { host.weatherLocationLabel }),
@@ -122,6 +125,7 @@ class SettingsPage(
                 "themes" -> themes(page, rerender)
                 "spaces" -> spaces(page)
                 "battery" -> battery(page)
+                "text" -> textPage(page, rerender)
                 "start" -> start(page)
                 "background" -> background(page, rerender)
                 "colours" -> colours(page, rerender)
@@ -424,6 +428,74 @@ class SettingsPage(
         page.addView(ui.action(R.drawable.ic_m_add, "New space") { host.addSpace() })
         page.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Pack tightly, sort, group by kind, grow what you use") { host.showArrange() })
         page.addView(ui.caption("Groups: add a Group name tile, then tap a group's name on Start to fold it away."))
+    }
+
+    private fun textPage(page: LinearLayout, rerender: () -> Unit) {
+        val apply = { host.applyTextPageSettings() }
+        page.addView(ui.toggleRow("Text page", "A third page after All apps: every app as its name, big when you use it a lot", prefs.textPageEnabled) {
+            prefs.textPageEnabled = it
+            apply()
+            rerender()
+        })
+        if (!prefs.textPageEnabled) return
+        val orders = listOf("az", "use", "size")
+        page.addView(ui.caption("Order"))
+        page.addView(ui.chips(listOf("A to Z", "Most used", "Biggest first"), orders.indexOf(prefs.textOrder).coerceAtLeast(0)) { i ->
+            prefs.textOrder = orders[i]
+            apply()
+        })
+        page.addView(ui.slider("Smallest names", 10, 24, prefs.textMinSp, format = { "$it sp" }) { v ->
+            prefs.textMinSp = v
+            apply()
+        })
+        page.addView(ui.slider("Biggest names", 24, 64, prefs.textMaxSp, format = { "$it sp" }) { v ->
+            prefs.textMaxSp = v
+            apply()
+        })
+        val shrinks = listOf("slow", "normal", "fast")
+        page.addView(ui.caption("Unused apps shrink"))
+        page.addView(ui.chips(listOf("Slowly", "Normally", "Quickly"), shrinks.indexOf(prefs.textShrink).coerceAtLeast(1)) { i ->
+            prefs.textShrink = shrinks[i]
+            apply()
+        })
+        val colors = listOf("accent", "white", "app")
+        page.addView(ui.caption("Colour"))
+        page.addView(ui.chips(listOf("Accent for top apps", "White", "App colours"), colors.indexOf(prefs.textColor).coerceAtLeast(0)) { i ->
+            prefs.textColor = colors[i]
+            apply()
+        })
+        val fonts = listOf("light", "regular", "bold")
+        page.addView(ui.caption("Font"))
+        page.addView(ui.chips(listOf("Light", "Regular", "Bold"), fonts.indexOf(prefs.textFont).coerceAtLeast(0)) { i ->
+            prefs.textFont = fonts[i]
+            apply()
+        })
+        val cases = listOf("lower", "asis", "upper")
+        page.addView(ui.caption("Letters"))
+        page.addView(ui.chips(listOf("lowercase", "As named", "UPPERCASE"), cases.indexOf(prefs.textCase).coerceAtLeast(0)) { i ->
+            prefs.textCase = cases[i]
+            apply()
+        })
+        val aligns = listOf("start", "center", "end")
+        page.addView(ui.caption("Line up"))
+        page.addView(ui.chips(listOf("Left", "Centre", "Right"), aligns.indexOf(prefs.textAlign).coerceAtLeast(0)) { i ->
+            prefs.textAlign = aligns[i]
+            apply()
+        })
+        page.addView(ui.slider("Space between names", 2, 28, prefs.textSpacingDp, format = { "$it dp" }) { v ->
+            prefs.textSpacingDp = v
+            apply()
+        })
+        page.addView(ui.toggleRow("Letter strip", "Slide along A–Z on the right to light up names", prefs.textLetterStrip) {
+            prefs.textLetterStrip = it
+            apply()
+        })
+        page.addView(ui.toggleRow("Search box", "Type to find an app at the top of the page", prefs.textSearch) {
+            prefs.textSearch = it
+            apply()
+        })
+        page.addView(ui.action(R.drawable.ic_m_reset, "Reset name sizes", "Start counting use again; big tiles stay big") { host.resetTextSizes() })
+        page.addView(ui.caption("Names grow as you open apps and fade a step at a time when you stop. Apps with big tiles on Start show big here too."))
     }
 
     private fun battery(page: LinearLayout) {

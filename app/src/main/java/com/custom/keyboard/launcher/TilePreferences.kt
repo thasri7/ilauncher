@@ -98,6 +98,68 @@ class TilePreferences(context: Context) {
     var swipeRightAction by stringPref("gesture_swipe_right", "space")
     var stepGoal by intPref("step_goal", 8000)
 
+    // ── Text page (AP15-style names page) ─────────────────────────────────────────────
+    var textPageEnabled by boolPref("text_page", true)
+    /** "az", "use" or "size". */
+    var textOrder by stringPref("text_order", "az")
+    var textMinSp by intPref("text_min_sp", 14)
+    var textMaxSp by intPref("text_max_sp", 40)
+    /** How fast unused apps shrink: "slow", "normal" or "fast". */
+    var textShrink by stringPref("text_shrink", "normal")
+    /** "accent" (top apps in accent), "white" or "app" (each app's own colour). */
+    var textColor by stringPref("text_color", "accent")
+    /** "light", "regular" or "bold". */
+    var textFont by stringPref("text_font", "light")
+    /** "lower", "upper" or "asis". */
+    var textCase by stringPref("text_case", "lower")
+    /** "start", "center" or "end". */
+    var textAlign by stringPref("text_align", "start")
+    var textSpacingDp by intPref("text_spacing_dp", 10)
+    var textLetterStrip by boolPref("text_letter_strip", true)
+    var textSearch by boolPref("text_search", true)
+
+    /** Days for an unused app's weight to halve on the Text page. */
+    val textHalfLifeDays: Double
+        get() = when (textShrink) {
+            "slow" -> 21.0
+            "fast" -> 4.0
+            else -> 10.0
+        }
+
+    /**
+     * How much each app is used lately: every launch adds 1, and the total halves every
+     * [halfLifeDays] without use. Apps launched before this was kept start from their count.
+     */
+    fun heat(now: Long = System.currentTimeMillis(), halfLifeDays: Double = textHalfLifeDays): Map<String, Double> {
+        val raw = prefs.getString("heat_json", null)
+        if (raw == null) return usageCounts().mapValues { it.value.toDouble() }
+        return runCatching {
+            val o = JSONObject(raw)
+            o.keys().asSequence().associateWith { k ->
+                val a = o.getJSONArray(k)
+                TextCloud.decay(a.getDouble(0), a.getLong(1), now, halfLifeDays)
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun recordHeat(packageName: String, now: Long) {
+        val o = runCatching { JSONObject(prefs.getString("heat_json", null) ?: seedHeat(now)) }.getOrDefault(JSONObject())
+        val old = o.optJSONArray(packageName)
+        // Stored at the slowest rate so changing the shrink speed later still works.
+        val score = if (old == null) 0.0 else TextCloud.decay(old.getDouble(0), old.getLong(1), now, 21.0)
+        o.put(packageName, JSONArray().put(score + 1.0).put(now))
+        prefs.edit().putString("heat_json", o.toString()).apply()
+    }
+
+    /** First run: start every app's weight from its launch count so far. */
+    private fun seedHeat(now: Long): String {
+        val o = JSONObject()
+        usageCounts().forEach { (pkg, n) -> o.put(pkg, JSONArray().put(n.toDouble()).put(now)) }
+        return o.toString()
+    }
+
+    fun resetHeat() = prefs.edit().putString("heat_json", "{}").apply()
+
     /** Set once the first-run app tiles were added, so unpinning them all doesn't bring them back. */
     var appsSeeded by boolPref("apps_seeded", false)
 
@@ -278,6 +340,7 @@ class TilePreferences(context: Context) {
         usage[packageName] = (usage[packageName] ?: 0) + 1
         prefs.edit().putString("usage_json", JSONObject(usage).toString()).apply()
         recordHour(packageName, Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+        recordHeat(packageName, System.currentTimeMillis())
 
         val tile = tiles.firstOrNull { it.packageName == packageName && it.shortcutId == null } ?: return null
         tile.launchCount++
