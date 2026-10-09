@@ -8,12 +8,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.SystemClock
+import android.text.TextUtils
 import android.text.format.DateFormat
 import android.util.TypedValue
 import android.view.Gravity
@@ -34,19 +36,30 @@ import com.custom.keyboard.R
 import com.custom.keyboard.models.TileItem
 import com.custom.keyboard.models.TileSize
 import com.custom.keyboard.models.TileType
+import java.io.File
 import java.util.Calendar
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
+import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.random.Random
 
+/**
+ * Start-screen tiles. Adapter positions equal indexes into [tiles], except while a folder is open:
+ * its panel is an extra row right after the folder. Use [positionOf] / [tileAt] to convert.
+ */
 class MetroTileAdapter(
     private val context: Context,
     private val tiles: MutableList<TileItem>,
     private val prefs: TilePreferences,
     private val icons: IconCache,
     private val media: MediaTileController,
+    private val widgets: WidgetTiles,
+    private val shortcuts: AppShortcuts,
+    private val backdrop: () -> StartBackdrop?,
+    private val weather: () -> WeatherReport?,
+    private val weatherConfigured: () -> Boolean,
     private val cellPitch: () -> Float,
     private val callbacks: Callbacks
 ) : RecyclerView.Adapter<MetroTileAdapter.TileHolder>() {
@@ -58,6 +71,8 @@ class MetroTileAdapter(
         fun onTileUnpinned(tile: TileItem)
         fun onTileMenu(tile: TileItem, anchor: View)
         fun onEditModeChanged(editing: Boolean)
+        fun onFolderAppClick(app: TileItem, view: View)
+        fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View)
     }
 
     companion object {
@@ -71,15 +86,20 @@ class MetroTileAdapter(
         private const val TYPE_SEARCH = 8
         private const val TYPE_ACTION = 9
         private const val TYPE_HEADER = 10
+        private const val TYPE_FOLDER = 11
+        private const val TYPE_FOLDER_PANEL = 12
+        private const val TYPE_PHOTOS = 13
+        private const val TYPE_WIDGET = 14
+        private const val TYPE_WEATHER = 15
 
         /** Re-read time/battery/storage values without re-binding anything else. */
         const val PAYLOAD_TICK = "tick"
         const val PAYLOAD_EDIT = "edit"
         const val PAYLOAD_NOTIFICATIONS = "notifications"
         const val PAYLOAD_MEDIA = "media"
-        /** Size or colour changed: full re-bind on the same holder, so the grid animates the move. */
+        /** Size, colour or content changed: full re-bind on the same holder, so the grid animates the move. */
         const val PAYLOAD_RESTYLE = "restyle"
-        /** App icons changed (install/update): reload them quietly. */
+        /** App icons changed (install, update, icon pack): reload them quietly. */
         const val PAYLOAD_ICONS = "icons"
 
         private const val BACK_FACE_HOLD_MS = 4500L
@@ -89,16 +109,122 @@ class MetroTileAdapter(
     private val density = context.resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private val headerHeightPx = (52 * density).toInt()
+    private val shortcutIcons = HashMap<String, Drawable?>()
+    private var recyclerView: RecyclerView? = null
+    private val windowLocation = IntArray(2)
 
     var editMode = false
         private set
     private var selectedId: String? = null
+    private var openFolderId: String? = null
+    private var panelJustOpened = false
 
-    val headerHeight: Int get() = headerHeightPx
+    /** Upcoming events for Calendar tiles (empty without calendar permission). */
+    var agenda: List<AgendaProvider.Event> = emptyList()
+        set(value) {
+            field = value
+            notifyTypes(PAYLOAD_TICK) { it.type == TileType.CALENDAR_BIG }
+        }
+
+    // ── Positions ───────────────────────────────────────────────────────────────────────
+
+    private fun panelPosition(): Int {
+        val id = openFolderId ?: return -1
+        val i = tiles.indexOfFirst { it.id == id }
+        return if (i < 0) -1 else i + 1
+    }
+
+    private fun isPanel(position: Int) = position == panelPosition()
+
+    /** The tile shown at [position]; for the open folder's panel this is the folder itself. */
+    private fun itemAt(position: Int): TileItem {
+        val panel = panelPosition()
+        return if (panel < 0 || position < panel) tiles[position] else tiles[position - 1]
+    }
+
+    /** The tile at an adapter position, or null for a folder panel. */
+    fun tileAt(position: Int): TileItem? = if (position < 0 || position >= itemCount || isPanel(position)) null else itemAt(position)
+
+    fun positionOf(tile: TileItem): Int {
+        val i = tiles.indexOf(tile)
+        if (i < 0) return -1
+        val panel = panelPosition()
+        return if (panel in 0..i) i + 1 else i
+    }
+
+    fun folderContaining(app: TileItem): TileItem? = tiles.firstOrNull { f -> f.type == TileType.FOLDER && f.children.any { it === app } }
+
+    // ── Structure changes (all list edits go through here) ─────────────────────────────
+
+    fun refresh(tile: TileItem, payload: String = PAYLOAD_RESTYLE) {
+        val pos = positionOf(tile)
+        if (pos >= 0) {
+            notifyItemChanged(pos, payload)
+            if (tile.id == openFolderId) notifyItemChanged(panelPosition(), PAYLOAD_RESTYLE)
+            return
+        }
+        folderContaining(tile)?.let { refresh(it) }
+    }
+
+    fun insertTile(tile: TileItem, index: Int = tiles.size) {
+        closeFolder()
+        tiles.add(index.coerceIn(0, tiles.size), tile)
+        notifyItemInserted(positionOf(tile))
+    }
+
+    fun removeTile(tile: TileItem) {
+        if (tile.id == openFolderId) closeFolder()
+        val pos = positionOf(tile)
+        if (pos < 0) return
+        tiles.remove(tile)
+        notifyItemRemoved(pos)
+    }
+
+    /** Swaps a tile for another, e.g. an app tile turning into a folder. */
+    fun replaceTile(old: TileItem, new: TileItem) {
+        closeFolder()
+        val i = tiles.indexOf(old)
+        if (i < 0) return
+        tiles[i] = new
+        notifyItemChanged(i)
+    }
+
+    fun moveTile(from: Int, to: Int) {
+        if (from < to) for (i in from until to) Collections.swap(tiles, i, i + 1)
+        else for (i in from downTo to + 1) Collections.swap(tiles, i, i - 1)
+        notifyItemMoved(from, to)
+    }
+
+    /** Opens or closes a folder inline. Returns the panel position when it opened, else -1. */
+    fun toggleFolder(folder: TileItem): Int {
+        if (openFolderId == folder.id) {
+            closeFolder()
+            return -1
+        }
+        closeFolder()
+        openFolderId = folder.id
+        panelJustOpened = true
+        val pos = panelPosition()
+        notifyItemInserted(pos)
+        notifyItemChanged(pos - 1, PAYLOAD_EDIT)
+        return pos
+    }
+
+    fun closeFolder() {
+        val pos = panelPosition()
+        if (pos < 0) {
+            openFolderId = null
+            return
+        }
+        openFolderId = null
+        notifyItemRemoved(pos)
+        notifyItemChanged(pos - 1, PAYLOAD_EDIT)
+    }
 
     // ── Edit mode ───────────────────────────────────────────────────────────────────────
 
     fun enterEditMode(selectId: String?) {
+        closeFolder()
         val wasEditing = editMode
         editMode = true
         selectedId = selectId
@@ -120,12 +246,6 @@ class MetroTileAdapter(
         notifyItemRangeChanged(0, itemCount, PAYLOAD_EDIT)
     }
 
-    fun moveTile(from: Int, to: Int) {
-        if (from < to) for (i in from until to) Collections.swap(tiles, i, i + 1)
-        else for (i in from downTo to + 1) Collections.swap(tiles, i, i - 1)
-        notifyItemMoved(from, to)
-    }
-
     /** Called when a drag ends, to settle the dragged tile back into its edit-mode look. */
     fun settle(holder: RecyclerView.ViewHolder) {
         val h = holder as? TileHolder ?: return
@@ -133,10 +253,22 @@ class MetroTileAdapter(
         applyEditState(h, tile, animate = true)
     }
 
+    /** Highlights the tile a dragged app would be dropped into to make a folder. */
+    fun setMergeHighlight(holder: RecyclerView.ViewHolder?, on: Boolean) {
+        val h = holder as? TileHolder ?: return
+        val tile = h.tile ?: return
+        if (!on) {
+            applyEditState(h, tile, animate = true)
+            return
+        }
+        MetroMotion.centerPivot(h.frame)
+        h.frame.animate().setStartDelay(0).scaleX(1.08f).scaleY(1.08f).alpha(1f).setDuration(160).start()
+    }
+
     // ── Live updates ────────────────────────────────────────────────────────────────────
 
     private fun notifyTypes(payload: String, predicate: (TileItem) -> Boolean) {
-        tiles.forEachIndexed { i, tile -> if (predicate(tile)) notifyItemChanged(i, payload) }
+        tiles.forEach { tile -> if (predicate(tile)) notifyItemChanged(positionOf(tile), payload) }
     }
 
     fun tick() = notifyTypes(PAYLOAD_TICK) {
@@ -146,9 +278,16 @@ class MetroTileAdapter(
 
     fun onBatteryChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.BATTERY_STATUS }
 
-    fun onNotificationsChanged() = notifyTypes(PAYLOAD_NOTIFICATIONS) { it.type == TileType.APP_SHORTCUT }
+    fun onNotificationsChanged() = notifyTypes(PAYLOAD_NOTIFICATIONS) { it.type == TileType.APP_SHORTCUT || it.type == TileType.FOLDER }
 
     fun onMediaChanged() = notifyTypes(PAYLOAD_MEDIA) { it.type == TileType.MEDIA_PLAYER }
+
+    fun onWeatherChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.WEATHER_LIVE }
+
+    fun refreshIcons() {
+        shortcutIcons.clear()
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_ICONS)
+    }
 
     /** One beat of the live-tile clock: flip a tile back to its front, or show a back face. */
     fun runLiveStep(rv: RecyclerView) {
@@ -158,7 +297,7 @@ class MetroTileAdapter(
             .mapNotNull { rv.getChildAt(it)?.let(rv::getChildViewHolder) as? TileHolder }
             .filter { h ->
                 val tile = h.tile
-                tile != null && tile.liveEnabled && h.hasBack(tile) &&
+                h !is FolderPanelHolder && tile != null && tile.liveEnabled && h.hasBack(tile) &&
                     h.itemView.bottom > 0 && h.itemView.top < rv.height
             }
         val target = live.filter { it.showingBack && now - it.lastLiveAt > BACK_FACE_HOLD_MS }.randomOrNull()
@@ -167,30 +306,64 @@ class MetroTileAdapter(
         target.toggleFace(now)
     }
 
-    // ── Adapter ─────────────────────────────────────────────────────────────────────────
-
-    fun spanFor(position: Int): MetroGridLayoutManager.Spec {
-        val tile = tiles.getOrNull(position) ?: return MetroGridLayoutManager.Spec(2, 2)
-        return if (tile.type == TileType.SECTION_HEADER) {
-            MetroGridLayoutManager.Spec(0, 0, headerHeightPx)
-        } else {
-            MetroGridLayoutManager.Spec(tile.size.cols, tile.size.rows)
+    /** Picture-in-tiles tiles show a slice of the picture that depends on where they are. */
+    fun invalidateBackdrops() {
+        val rv = recyclerView ?: return
+        if (prefs.backgroundMode != "picture") return
+        for (i in 0 until rv.childCount) {
+            (rv.getChildAt(i)?.let(rv::getChildViewHolder) as? TileHolder)?.surface?.invalidate()
         }
     }
 
-    override fun getItemCount(): Int = tiles.size
+    // ── Adapter ─────────────────────────────────────────────────────────────────────────
 
-    override fun getItemViewType(position: Int): Int = when (tiles[position].type) {
-        TileType.APP_SHORTCUT -> TYPE_APP
-        TileType.CLOCK_WEATHER -> TYPE_CLOCK
-        TileType.CALENDAR_BIG -> TYPE_CALENDAR
-        TileType.BATTERY_STATUS -> TYPE_BATTERY
-        TileType.STORAGE_STATS -> TYPE_STORAGE
-        TileType.MEDIA_PLAYER -> TYPE_MEDIA
-        TileType.QUICK_CONTACT -> TYPE_CONTACT
-        TileType.EXPRESS_SEARCH -> TYPE_SEARCH
-        TileType.SECTION_HEADER -> TYPE_HEADER
-        TileType.WEATHER_LIVE, TileType.KEYBOARD_SETTINGS, TileType.DEVICE_SETTINGS -> TYPE_ACTION
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        this.recyclerView = recyclerView
+        recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) = invalidateBackdrops()
+        })
+    }
+
+    fun spanFor(position: Int): MetroGridPacker.Spec {
+        if (position < 0 || position >= itemCount) return MetroGridPacker.Spec(2, 2)
+        if (isPanel(position)) return MetroGridPacker.Spec(0, 0, panelHeight(itemAt(position)))
+        val tile = itemAt(position)
+        return if (tile.type == TileType.SECTION_HEADER) {
+            MetroGridPacker.Spec(0, 0, headerHeightPx)
+        } else {
+            MetroGridPacker.Spec(tile.size.cols, tile.size.rows)
+        }
+    }
+
+    private val panelPadding get() = (8 * density).toInt()
+
+    private fun panelPerRow() = (prefs.columns / 2).coerceAtLeast(2)
+
+    private fun panelHeight(folder: TileItem): Int {
+        val rows = ceil(folder.children.size.coerceAtLeast(1) / panelPerRow().toFloat()).toInt()
+        return (panelPadding * 2 + rows * 2 * cellPitch() - prefs.gutterDp * density).toInt().coerceAtLeast(1)
+    }
+
+    override fun getItemCount(): Int = tiles.size + if (panelPosition() >= 0) 1 else 0
+
+    override fun getItemViewType(position: Int): Int {
+        if (isPanel(position)) return TYPE_FOLDER_PANEL
+        return when (itemAt(position).type) {
+            TileType.APP_SHORTCUT -> TYPE_APP
+            TileType.CLOCK_WEATHER -> TYPE_CLOCK
+            TileType.CALENDAR_BIG -> TYPE_CALENDAR
+            TileType.BATTERY_STATUS -> TYPE_BATTERY
+            TileType.STORAGE_STATS -> TYPE_STORAGE
+            TileType.MEDIA_PLAYER -> TYPE_MEDIA
+            TileType.QUICK_CONTACT -> TYPE_CONTACT
+            TileType.EXPRESS_SEARCH -> TYPE_SEARCH
+            TileType.SECTION_HEADER -> TYPE_HEADER
+            TileType.FOLDER -> TYPE_FOLDER
+            TileType.PHOTOS -> TYPE_PHOTOS
+            TileType.WIDGET -> TYPE_WIDGET
+            TileType.WEATHER_LIVE -> TYPE_WEATHER
+            TileType.KEYBOARD_SETTINGS, TileType.DEVICE_SETTINGS -> TYPE_ACTION
+        }
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TileHolder {
@@ -204,11 +377,16 @@ class MetroTileAdapter(
             TYPE_CONTACT -> R.layout.item_tile_contact
             TYPE_SEARCH -> R.layout.item_tile_search
             TYPE_HEADER -> R.layout.item_tile_section
+            TYPE_FOLDER -> R.layout.item_tile_folder
+            TYPE_PHOTOS -> R.layout.item_tile_photos
+            TYPE_WIDGET -> R.layout.item_tile_widget
+            TYPE_FOLDER_PANEL -> R.layout.item_tile_folder_panel
+            TYPE_WEATHER -> R.layout.item_tile_weather
             else -> R.layout.item_tile_action
         }
         // itemView belongs to RecyclerView's item animator and ItemTouchHelper (they move it and
         // cancel its animations on every change), so all Metro motion runs on the inner frame.
-        val root = FrameLayout(parent.context).apply {
+        val root = TileRootLayout(parent.context) { editMode }.apply {
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             clipChildren = false
         }
@@ -226,14 +404,19 @@ class MetroTileAdapter(
             TYPE_CONTACT -> ContactHolder(root, frame, surface)
             TYPE_SEARCH -> SearchHolder(root, frame, surface)
             TYPE_HEADER -> HeaderHolder(root, frame, surface)
+            TYPE_FOLDER -> FolderHolder(root, frame, surface)
+            TYPE_PHOTOS -> PhotosHolder(root, frame, surface)
+            TYPE_WIDGET -> WidgetHolder(root, frame, surface)
+            TYPE_FOLDER_PANEL -> FolderPanelHolder(root, frame, surface)
+            TYPE_WEATHER -> WeatherHolder(root, frame, surface)
             else -> ActionHolder(root, frame, surface)
         }
-        wireTouches(holder)
+        if (holder !is FolderPanelHolder) wireTouches(holder)
         return holder
     }
 
     override fun onBindViewHolder(holder: TileHolder, position: Int) {
-        val tile = tiles[position]
+        val tile = itemAt(position)
         if (holder.tile?.id != tile.id) {
             holder.resetFaces()
             // Desynchronise live tiles so they don't all flip on the same beat.
@@ -245,15 +428,15 @@ class MetroTileAdapter(
         styleSurface(holder, tile)
         holder.bindContent(tile)
         if (holder.showingBack && !(prefs.liveTilesEnabled && tile.liveEnabled && holder.hasBack(tile))) holder.resetFaces()
-        applyEditState(holder, tile, animate = false)
+        if (holder !is FolderPanelHolder) applyEditState(holder, tile, animate = false)
     }
 
     override fun onBindViewHolder(holder: TileHolder, position: Int, payloads: MutableList<Any>) {
-        if (payloads.isEmpty()) {
+        if (payloads.isEmpty() || holder is FolderPanelHolder) {
             onBindViewHolder(holder, position)
             return
         }
-        val tile = tiles[position]
+        val tile = itemAt(position)
         holder.tile = tile
         if (PAYLOAD_RESTYLE in payloads) {
             onBindViewHolder(holder, position)
@@ -284,19 +467,46 @@ class MetroTileAdapter(
         return prefs.accentColorInt
     }
 
-    private fun styleSurface(holder: TileHolder, tile: TileItem) {
-        if (tile.type == TileType.SECTION_HEADER) {
-            holder.surface.background = null
-            return
-        }
-        val color = colorFor(tile)
-        val alpha = (prefs.tileOpacity.coerceIn(20, 100) * 255) / 100
-        holder.surface.background = GradientDrawable().apply {
-            setColor(Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color)))
-            cornerRadius = prefs.cornerRadiusDp * density
-        }
-        holder.surface.clipToOutline = prefs.cornerRadiusDp > 0
+    private fun withAlpha(color: Int, percent: Int): Int =
+        Color.argb(percent.coerceIn(0, 100) * 255 / 100, Color.red(color), Color.green(color), Color.blue(color))
+
+    private fun darker(color: Int, factor: Float): Int =
+        Color.rgb((Color.red(color) * factor).toInt(), (Color.green(color) * factor).toInt(), (Color.blue(color) * factor).toInt())
+
+    /** Where the tile sits in the window, ignoring animation transforms. */
+    private fun screenOffset(holder: TileHolder): Pair<Float, Float> {
+        val rv = recyclerView ?: return 0f to 0f
+        rv.getLocationInWindow(windowLocation)
+        return (windowLocation[0] + holder.itemView.left).toFloat() to (windowLocation[1] + holder.itemView.top).toFloat()
     }
+
+    private fun tileBackground(holder: TileHolder, color: Int, radius: Float): Drawable {
+        val picture = if (prefs.backgroundMode == "picture") backdrop() else null
+        if (picture != null) {
+            // The picture shows through the tile with a light wash of the tile colour.
+            val tint = withAlpha(color, (prefs.tileOpacity - 40).coerceIn(0, 60))
+            return picture.tileDrawable(tint, radius) { screenOffset(holder) }
+        }
+        return GradientDrawable().apply {
+            setColor(withAlpha(color, prefs.tileOpacity.coerceIn(20, 100)))
+            cornerRadius = radius
+        }
+    }
+
+    private fun styleSurface(holder: TileHolder, tile: TileItem) {
+        val radius = prefs.cornerRadiusDp * density
+        holder.surface.background = when {
+            tile.type == TileType.SECTION_HEADER || tile.type == TileType.WIDGET -> null
+            holder is FolderPanelHolder -> GradientDrawable().apply {
+                setColor(withAlpha(darker(colorFor(tile), 0.55f), prefs.tileOpacity.coerceIn(40, 100)))
+                cornerRadius = radius
+            }
+            else -> tileBackground(holder, colorFor(tile), radius)
+        }
+        holder.surface.clipToOutline = prefs.cornerRadiusDp > 0 || tile.type == TileType.WIDGET
+    }
+
+    private fun tileWidthPx(tile: TileItem): Float = tile.size.cols * cellPitch() - prefs.gutterDp * density
 
     private fun tileHeightPx(tile: TileItem): Float = tile.size.rows * cellPitch() - prefs.gutterDp * density
 
@@ -342,6 +552,7 @@ class MetroTileAdapter(
                 b.layoutParams = lp
             }
         }
+        if (h is FolderHolder) h.setOpen(tile.id == openFolderId)
     }
 
     // ── Touch: tilt, tap, long-press to customise, drag to move ─────────────────────────
@@ -355,7 +566,7 @@ class MetroTileAdapter(
         var dragging = false
         root.setOnTouchListener { _, e ->
             val tile = holder.tile ?: return@setOnTouchListener false
-            val tilts = !editMode && prefs.tiltEnabled && tile.type != TileType.SECTION_HEADER
+            val tilts = !editMode && prefs.tiltEnabled && tile.type != TileType.SECTION_HEADER && tile.type != TileType.WIDGET
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX
@@ -380,12 +591,13 @@ class MetroTileAdapter(
             val tile = holder.tile ?: return@setOnClickListener
             if (editMode) select(tile.id) else callbacks.onTileClick(tile, root)
         }
-        root.setOnLongClickListener {
-            val tile = holder.tile ?: return@setOnLongClickListener false
-            if (editMode) select(tile.id) else enterEditMode(tile.id)
-            // The finger is still down, so the same gesture can carry straight on into a drag.
-            callbacks.onStartDrag(holder)
-            true
+        (root as TileRootLayout).onLongPress = {
+            holder.tile?.let { tile ->
+                MetroMotion.releaseTilt(frame)
+                if (editMode) select(tile.id) else enterEditMode(tile.id)
+                // The finger is still down, so the same gesture can carry straight on into a drag.
+                callbacks.onStartDrag(holder)
+            }
         }
         holder.btnUnpin.setOnClickListener { holder.tile?.let { callbacks.onTileUnpinned(it) } }
         holder.btnResize.setOnClickListener {
@@ -428,6 +640,26 @@ class MetroTileAdapter(
             })
         }
 
+    private fun appIconInto(view: ImageView, tile: TileItem, themed: Boolean, stillBound: () -> Boolean, onThemed: (Boolean) -> Unit = {}) {
+        val pkg = tile.packageName
+        val shortcutId = tile.shortcutId
+        if (pkg != null && shortcutId != null) {
+            val key = "$pkg/$shortcutId"
+            val icon = if (shortcutIcons.containsKey(key)) shortcutIcons[key] else shortcuts.find(pkg, shortcutId)?.let(shortcuts::icon).also { shortcutIcons[key] = it }
+            if (icon != null) {
+                view.setImageDrawable(icon.constantState?.newDrawable(context.resources) ?: icon)
+                onThemed(false)
+                return
+            }
+        }
+        icons.iconAsync(pkg, themed) { drawable, isThemed ->
+            if (stillBound()) {
+                view.setImageDrawable(drawable)
+                onThemed(isThemed)
+            }
+        }
+    }
+
     // ── Holders ─────────────────────────────────────────────────────────────────────────
 
     abstract inner class TileHolder(
@@ -453,11 +685,15 @@ class MetroTileAdapter(
 
         open fun invalidateIcons() {}
 
+        /** Called just before a live animation reveals a face, to load what it should show. */
+        open fun beforeReveal(showBack: Boolean) {}
+
         fun toggleFace(now: Long) {
             val f = front ?: return
             val b = back ?: return
             showingBack = !showingBack
             lastLiveAt = now
+            beforeReveal(showingBack)
             if (!prefs.animationsEnabled) MetroMotion.showFace(f, b, showingBack)
             else if (peeks) MetroMotion.peek(f, b, showingBack)
             else MetroMotion.flip(surface, f, b, showingBack)
@@ -482,25 +718,23 @@ class MetroTileAdapter(
         private val backIcon: ImageView = surface.findViewById(R.id.iv_tile_back_icon)
         private val backName: TextView = surface.findViewById(R.id.tv_tile_back_name)
         private val backCount: TextView = surface.findViewById(R.id.tv_tile_back_count)
-        private var boundPackage: String? = null
-        private var boundThemed = false
+        private var boundKey: String? = null
+        private var themed = false
 
         override val peeks = true
 
         override fun invalidateIcons() {
-            boundPackage = null
+            boundKey = null
         }
 
         override fun hasBack(tile: TileItem): Boolean {
-            if (tile.size == TileSize.SMALL) return false
+            if (tile.size == TileSize.SMALL || tile.shortcutId != null) return false
             val entry = NotificationHub.get(tile.packageName) ?: return false
             return entry.title.isNotEmpty() || entry.text.isNotEmpty()
         }
 
-        override fun bindContent(tile: TileItem) {
+        private fun sizeIcon(tile: TileItem) {
             val h = tileHeightPx(tile)
-            val themedDrawable = if (prefs.themedIcons) icons.themedIcon(tile.packageName) else null
-            val themed = themedDrawable != null
             // Monochrome layers carry adaptive-icon padding, so they get a bigger box.
             val factor = when (tile.size) {
                 TileSize.SMALL -> 0.5f
@@ -508,17 +742,25 @@ class MetroTileAdapter(
                 else -> 0.36f
             } * (if (themed) 1.9f else 1f)
             icon.square(minOf(h * factor, h * 0.9f).toInt())
-            if (boundPackage != tile.packageName || boundThemed != themed) {
-                icon.setImageDrawable(themedDrawable ?: icons.icon(tile.packageName))
-                backIcon.setImageDrawable(icons.icon(tile.packageName))
-                boundPackage = tile.packageName
-                boundThemed = themed
+        }
+
+        override fun bindContent(tile: TileItem) {
+            val key = "${tile.packageName}/${tile.shortcutId}/${prefs.themedIcons}"
+            if (boundKey != key) {
+                boundKey = key
+                icon.setImageDrawable(null)
+                appIconInto(icon, tile, prefs.themedIcons, { boundKey == key }) { isThemed ->
+                    themed = isThemed
+                    this.tile?.let { sizeIcon(it) }
+                }
+                icons.iconAsync(tile.packageName, themed = false) { d, _ -> if (boundKey == key) backIcon.setImageDrawable(d) }
             }
+            sizeIcon(tile)
 
             label.text = tile.title
             label.show(prefs.showLabels && tile.size != TileSize.SMALL)
 
-            val entry = NotificationHub.get(tile.packageName)
+            val entry = if (tile.shortcutId == null) NotificationHub.get(tile.packageName) else null
             val countText = entry?.count?.takeIf { it > 0 }?.let { if (it > 99) "99+" else it.toString() }.orEmpty()
             count.text = countText
             count.show(countText.isNotEmpty())
@@ -527,6 +769,136 @@ class MetroTileAdapter(
             backText.maxLines = if (tile.size == TileSize.LARGE) 9 else 3
             backName.text = tile.title
             backCount.text = countText
+        }
+    }
+
+    inner class FolderHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val grid: LinearLayout = surface.findViewById(R.id.ll_folder_grid)
+        private val label: TextView = surface.findViewById(R.id.tv_folder_name)
+        private val count: TextView = surface.findViewById(R.id.tv_folder_count)
+        private val chevron: ImageView = surface.findViewById(R.id.iv_folder_chevron)
+        private var boundKey: String? = null
+
+        override fun invalidateIcons() {
+            boundKey = null
+        }
+
+        fun setOpen(open: Boolean) {
+            chevron.animate().setStartDelay(0).rotation(if (open) 180f else 0f).setDuration(200).start()
+        }
+
+        override fun bindContent(tile: TileItem) {
+            val (rows, cols) = when (tile.size) {
+                TileSize.SMALL -> 2 to 2
+                TileSize.MEDIUM -> 2 to 2
+                TileSize.WIDE -> 2 to 4
+                TileSize.LARGE -> 3 to 3
+            }
+            val key = tile.children.joinToString(",") { it.id } + "/$rows/$cols/${cellPitch()}"
+            if (boundKey != key) {
+                boundKey = key
+                grid.removeAllViews()
+                val h = tileHeightPx(tile)
+                val iconPx = (h * if (tile.size == TileSize.SMALL) 0.34f else 0.22f).toInt()
+                val gap = (4 * density).toInt()
+                var index = 0
+                for (r in 0 until rows) {
+                    val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+                    for (c in 0 until cols) {
+                        val child = tile.children.getOrNull(index++)
+                        val iv = ImageView(context)
+                        row.addView(iv, LinearLayout.LayoutParams(iconPx, iconPx).apply { setMargins(gap / 2, gap / 2, gap / 2, gap / 2) })
+                        if (child != null) appIconInto(iv, child, themed = false, stillBound = { boundKey == key })
+                    }
+                    grid.addView(row)
+                }
+            }
+            label.text = tile.title
+            label.show(prefs.showLabels && tile.size != TileSize.SMALL)
+            val unread = tile.children.sumOf { NotificationHub.get(it.packageName)?.count ?: 0 }
+            count.text = if (unread > 0) unread.toString() else ""
+            count.show(unread > 0)
+            chevron.show(tile.size != TileSize.SMALL)
+        }
+    }
+
+    /** The open folder's contents, laid out inline across the full width (W10M style). */
+    inner class FolderPanelHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val container: FrameLayout = surface.findViewById(R.id.fl_folder_panel)
+
+        @SuppressLint("ClickableViewAccessibility")
+        override fun bindContent(tile: TileItem) {
+            container.removeAllViews()
+            val pitch = cellPitch()
+            val gutter = prefs.gutterDp * density
+            val size = (2 * pitch - gutter).toInt()
+            val perRow = panelPerRow()
+            val color = colorFor(tile)
+            val cells = ArrayList<View>()
+            tile.children.forEachIndexed { i, app ->
+                val cell = FrameLayout(context).apply {
+                    background = GradientDrawable().apply {
+                        setColor(withAlpha(color, prefs.tileOpacity.coerceIn(20, 100)))
+                        cornerRadius = prefs.cornerRadiusDp * density
+                    }
+                    clipToOutline = prefs.cornerRadiusDp > 0
+                }
+                val iv = ImageView(context)
+                val iconPx = (size * 0.36f).toInt()
+                cell.addView(iv, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER))
+                appIconInto(iv, app, themed = false, stillBound = { this.tile === tile })
+                cell.addView(TextView(context).apply {
+                    text = app.title
+                    setTextColor(Color.WHITE)
+                    textSize = 12f
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    val pad = (7 * density).toInt()
+                    setPadding(pad, 0, pad, pad)
+                    visibility = if (prefs.showLabels) View.VISIBLE else View.GONE
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+                NotificationHub.get(app.packageName)?.count?.takeIf { it > 0 }?.let { n ->
+                    cell.addView(TextView(context).apply {
+                        text = n.toString()
+                        setTextColor(Color.WHITE)
+                        textSize = 13f
+                        val pad = (7 * density).toInt()
+                        setPadding(pad, pad, pad, pad)
+                    }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
+                }
+                cell.setOnTouchListener { v, e ->
+                    if (prefs.tiltEnabled) when (e.actionMasked) {
+                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> MetroMotion.tiltTo(v, e.x, e.y)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> MetroMotion.releaseTilt(v)
+                    }
+                    false
+                }
+                cell.setOnClickListener { callbacks.onFolderAppClick(app, cell) }
+                cell.setOnLongClickListener {
+                    callbacks.onFolderAppMenu(tile, app, cell)
+                    true
+                }
+                val lp = FrameLayout.LayoutParams(size, size).apply {
+                    leftMargin = panelPadding + ((i % perRow) * 2 * pitch).toInt()
+                    topMargin = panelPadding + ((i / perRow) * 2 * pitch).toInt()
+                }
+                container.addView(cell, lp)
+                cells.add(cell)
+            }
+            if (panelJustOpened && prefs.animationsEnabled) {
+                panelJustOpened = false
+                surface.pivotY = 0f
+                surface.scaleY = 0.3f
+                surface.alpha = 0f
+                surface.animate().setStartDelay(0).scaleY(1f).alpha(1f).setDuration(240).setInterpolator(DecelerateInterpolator(2f)).start()
+                cells.forEachIndexed { i, c ->
+                    c.alpha = 0f
+                    c.translationY = -12 * density
+                    c.animate().setStartDelay(60L + i * 25L).alpha(1f).translationY(0f).setDuration(260)
+                        .setInterpolator(DecelerateInterpolator(2f)).start()
+                }
+            }
+            panelJustOpened = false
         }
     }
 
@@ -572,10 +944,19 @@ class MetroTileAdapter(
     inner class CalendarHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
         private val weekday: TextView = surface.findViewById(R.id.tv_cal_weekday)
         private val day: TextView = surface.findViewById(R.id.tv_cal_day)
+        private val events: TextView = surface.findViewById(R.id.tv_cal_events)
         private val month: TextView = surface.findViewById(R.id.tv_cal_month)
         private val detail: TextView = surface.findViewById(R.id.tv_cal_detail)
 
         override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL
+
+        private fun whenText(e: AgendaProvider.Event): String {
+            val today = Calendar.getInstance()
+            val at = Calendar.getInstance().apply { timeInMillis = e.begin }
+            val sameDay = today.get(Calendar.YEAR) == at.get(Calendar.YEAR) && today.get(Calendar.DAY_OF_YEAR) == at.get(Calendar.DAY_OF_YEAR)
+            val time = if (e.allDay) "All day" else DateFormat.getTimeFormat(context).format(Date(e.begin))
+            return if (sameDay) time else "${DateFormat.format("EEE", at)} $time"
+        }
 
         override fun bindContent(tile: TileItem) {
             val cal = Calendar.getInstance()
@@ -584,9 +965,22 @@ class MetroTileAdapter(
             day.text = cal.get(Calendar.DAY_OF_MONTH).toString()
             day.sizePx(tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.45f else 0.42f)
             weekday.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (tile.size == TileSize.SMALL) 11f else 14f)
-            month.text = DateFormat.format("MMMM yyyy", now)
-            val daysInYear = cal.getActualMaximum(Calendar.DAY_OF_YEAR)
-            detail.text = "Week ${cal.get(Calendar.WEEK_OF_YEAR)}\nDay ${cal.get(Calendar.DAY_OF_YEAR)} of $daysInYear"
+
+            val upcoming = agenda
+            val roomy = tile.size == TileSize.WIDE || tile.size == TileSize.LARGE
+            events.show(roomy && upcoming.isNotEmpty())
+            events.text = upcoming.take(if (tile.size == TileSize.LARGE) 5 else 2)
+                .joinToString("\n") { "${whenText(it)}  ${it.title}" }
+
+            val next = upcoming.firstOrNull()
+            if (next != null) {
+                month.text = next.title
+                detail.text = listOf(whenText(next), next.location).filter { it.isNotEmpty() }.joinToString("\n")
+            } else {
+                month.text = DateFormat.format("MMMM yyyy", now)
+                val daysInYear = cal.getActualMaximum(Calendar.DAY_OF_YEAR)
+                detail.text = "Week ${cal.get(Calendar.WEEK_OF_YEAR)}\nDay ${cal.get(Calendar.DAY_OF_YEAR)} of $daysInYear"
+            }
         }
     }
 
@@ -737,6 +1131,8 @@ class MetroTileAdapter(
 
     inner class ContactHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
         private val avatar: TextView = surface.findViewById(R.id.tv_contact_avatar)
+        private val photo: ImageView = surface.findViewById(R.id.iv_contact_photo)
+        private val photoScrim: View = surface.findViewById(R.id.v_contact_scrim)
         private val name: TextView = surface.findViewById(R.id.tv_contact_name)
         private val backName: TextView = surface.findViewById(R.id.tv_contact_back_name)
         private val backPhone: TextView = surface.findViewById(R.id.tv_contact_back_phone)
@@ -752,6 +1148,151 @@ class MetroTileAdapter(
             name.show(prefs.showLabels && tile.size != TileSize.SMALL)
             backName.text = tile.title
             backPhone.text = tile.contactPhone
+
+            val file = TileMedia.portrait(context, tile.id)
+            photo.show(file != null)
+            photoScrim.show(file != null)
+            avatar.show(file == null)
+            if (file != null) {
+                val id = tile.id
+                TileMedia.loadAsync(file, tileWidthPx(tile).toInt().coerceAtLeast(64)) { bmp -> if (this.tile?.id == id) photo.setImageBitmap(bmp) }
+            }
+        }
+    }
+
+    inner class PhotosHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val frontImage: ImageView = surface.findViewById(R.id.face_front)
+        private val backImage: ImageView = surface.findViewById(R.id.face_back)
+        private val label: TextView = surface.findViewById(R.id.tv_photos_label)
+        private val empty: View = surface.findViewById(R.id.ll_photos_empty)
+        private var files: List<File> = emptyList()
+        private var index = 0
+        private var boundFor: String? = null
+
+        override val peeks = true
+
+        override fun hasBack(tile: TileItem) = files.size >= 2
+
+        override fun invalidateIcons() {
+            boundFor = null
+        }
+
+        private fun px(tile: TileItem) = maxOf(tileWidthPx(tile), tileHeightPx(tile)).toInt().coerceAtLeast(64)
+
+        private fun show(target: ImageView, i: Int) {
+            val tile = tile ?: return
+            val file = files.getOrNull(i) ?: return
+            val id = tile.id
+            TileMedia.loadAsync(file, px(tile)) { bmp -> if (this.tile?.id == id) target.setImageBitmap(bmp) }
+            // Warm the cache for the photo after this one.
+            files.getOrNull((i + 1) % files.size)?.let { TileMedia.loadAsync(it, px(tile)) {} }
+        }
+
+        override fun beforeReveal(showBack: Boolean) {
+            if (files.isEmpty()) return
+            index = (index + 1) % files.size
+            show(if (showBack) backImage else frontImage, index)
+        }
+
+        override fun bindContent(tile: TileItem) {
+            if (boundFor != tile.id + tile.size) {
+                boundFor = tile.id + tile.size
+                files = TileMedia.photos(context, tile.id)
+                index = 0
+                frontImage.setImageDrawable(null)
+                show(frontImage, 0)
+            }
+            empty.show(files.isEmpty())
+            label.text = tile.title
+            label.show(prefs.showLabels && tile.size != TileSize.SMALL && files.isNotEmpty())
+        }
+    }
+
+    inner class WidgetHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val container: FrameLayout = surface.findViewById(R.id.fl_widget_container)
+        private val missing: TextView = surface.findViewById(R.id.tv_widget_missing)
+        private var boundWidget = -1
+
+        override fun bindContent(tile: TileItem) {
+            if (boundWidget != tile.appWidgetId) {
+                boundWidget = tile.appWidgetId
+                container.removeAllViews()
+                val view = widgets.createView(context, tile.appWidgetId)
+                if (view != null) {
+                    container.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                }
+                missing.show(view == null)
+            }
+            widgets.updateSize(tile.appWidgetId, (tileWidthPx(tile) / density).toInt(), (tileHeightPx(tile) / density).toInt())
+        }
+    }
+
+    inner class WeatherHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val icon: ImageView = surface.findViewById(R.id.iv_weather_icon)
+        private val temp: TextView = surface.findViewById(R.id.tv_weather_temp)
+        private val detail: View = surface.findViewById(R.id.ll_weather_detail)
+        private val condition: TextView = surface.findViewById(R.id.tv_weather_condition)
+        private val range: TextView = surface.findViewById(R.id.tv_weather_range)
+        private val place: TextView = surface.findViewById(R.id.tv_weather_place)
+        private val days: LinearLayout = surface.findViewById(R.id.ll_weather_days)
+        private val backPlace: TextView = surface.findViewById(R.id.tv_weather_back_place)
+
+        override fun hasBack(tile: TileItem) = tile.size != TileSize.SMALL && (weather()?.days?.size ?: 0) >= 2
+
+        private fun deg(v: Double) = "${Math.round(v)}°"
+
+        override fun bindContent(tile: TileItem) {
+            val report = weather()
+            val h = tileHeightPx(tile)
+            val small = tile.size == TileSize.SMALL
+            val roomy = tile.size == TileSize.WIDE || tile.size == TileSize.LARGE
+            icon.square((h * if (small) 0.42f else 0.3f).toInt())
+            temp.sizePx(h * if (small) 0.26f else if (tile.size == TileSize.MEDIUM) 0.24f else 0.3f)
+            if (report == null) {
+                icon.setImageResource(R.drawable.ic_m_sun)
+                temp.text = if (small) "" else "—"
+                condition.text = if (weatherConfigured()) "Updating…" else "Tap to set up"
+                range.text = ""
+                place.text = tile.title
+            } else {
+                icon.setImageResource(WeatherCodes.icon(report.code, report.isDay))
+                temp.text = deg(report.temperature)
+                condition.text = WeatherCodes.describe(report.code)
+                range.text = report.today?.let { "${deg(it.max)} / ${deg(it.min)}" }.orEmpty()
+                place.text = report.place.ifEmpty { tile.title }
+            }
+            temp.show(!small || report != null)
+            detail.show(roomy || report == null && !small)
+            place.show(!small && prefs.showLabels)
+            backPlace.text = place.text
+
+            days.removeAllViews()
+            report?.days?.drop(1)?.take(if (roomy) 4 else 2)?.forEach { d ->
+                days.addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    val label = runCatching {
+                        val parts = d.date.split("-").map { it.toInt() }
+                        val c = Calendar.getInstance().apply { set(parts[0], parts[1] - 1, parts[2]) }
+                        DateFormat.format("EEE", c).toString()
+                    }.getOrDefault(d.date.takeLast(5))
+                    addView(TextView(context).apply {
+                        text = label
+                        setTextColor(Color.WHITE)
+                        textSize = 12f
+                    })
+                    addView(ImageView(context).apply {
+                        setImageResource(WeatherCodes.icon(d.code, true))
+                        val s = (22 * density).toInt()
+                        layoutParams = LinearLayout.LayoutParams(s, s).apply { setMargins(0, (3 * density).toInt(), 0, (3 * density).toInt()) }
+                    })
+                    addView(TextView(context).apply {
+                        text = "${deg(d.max)} ${deg(d.min)}"
+                        setTextColor(Color.WHITE)
+                        textSize = 12f
+                    })
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
         }
     }
 
@@ -774,11 +1315,7 @@ class MetroTileAdapter(
             iconView.setImageDrawable(
                 ContextCompat.getDrawable(
                     context,
-                    when (tile.type) {
-                        TileType.KEYBOARD_SETTINGS -> R.drawable.ic_m_keyboard
-                        TileType.WEATHER_LIVE -> R.drawable.ic_m_sun
-                        else -> R.drawable.ic_m_settings
-                    }
+                    if (tile.type == TileType.KEYBOARD_SETTINGS) R.drawable.ic_m_keyboard else R.drawable.ic_m_settings
                 )
             )
             iconView.square((tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.45f else 0.3f).toInt())

@@ -46,4 +46,8 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.cardview:cardview:1.0.0")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
+
+    testImplementation("junit:junit:4.13.2")
+    // Real org.json for unit tests (android.jar only has stubs).
+    testImplementation("org.json:json:20240303")
 }

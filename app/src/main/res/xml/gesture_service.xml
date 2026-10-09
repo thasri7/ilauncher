@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gesture helper: performs "lock screen" / "open notifications" only. It subscribes to no
+     events and cannot read window content. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAnnouncement"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/gesture_service_description"
+    android:notificationTimeout="0"
+    android:packageNames="com.custom.keyboard" />

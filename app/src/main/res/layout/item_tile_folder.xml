@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folder tile: a grid of the apps inside; tap opens the folder inline below it. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tile_surface"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <FrameLayout
+        android:id="@+id/face_front"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="7dp">
+
+        <LinearLayout
+            android:id="@+id/ll_folder_grid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginBottom="6dp"
+            android:orientation="vertical" />
+
+        <TextView
+            android:id="@+id/tv_folder_name"
+            style="@style/MetroTileLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_marginEnd="40dp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tv_folder_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:fontFamily="sans-serif-medium"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <ImageView
+                android:id="@+id/iv_folder_chevron"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:contentDescription="@null"
+                android:rotation="0"
+                android:src="@drawable/ic_m_chevron_down" />
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

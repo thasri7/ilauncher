@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- People tile: big initials on the front, name and number on the back (flips). -->
+<!-- People tile: photo (or big initials) on the front, name and number on the back (flips). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tile_surface"
     android:layout_width="match_parent"
@@ -8,8 +8,22 @@
     <FrameLayout
         android:id="@+id/face_front"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:padding="7dp">
+        android:layout_height="match_parent">
+
+        <ImageView
+            android:id="@+id/iv_contact_photo"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <View
+            android:id="@+id/v_contact_scrim"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_tile_scrim"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/tv_contact_avatar"
@@ -25,7 +39,8 @@
             style="@style/MetroTileLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start" />
+            android:layout_gravity="bottom|start"
+            android:layout_margin="7dp" />
     </FrameLayout>
 
     <LinearLayout

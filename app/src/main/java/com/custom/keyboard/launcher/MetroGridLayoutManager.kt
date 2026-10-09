@@ -4,23 +4,15 @@ import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
-import kotlin.math.roundToInt
 
 /**
- * Lays tiles out the way the Windows 10 Mobile Start screen does. The grid is made of 2×2-cell
- * blocks: medium, wide and large tiles take whole blocks (first free spot, row by row), while
- * small tiles share a block four at a time. A full-width row such as a group header closes the
- * current group and starts a new one underneath, like named tile groups on the phone.
- *
- * Every frame is computed up front (Start screens hold tens of tiles, not thousands), and only
- * the tiles near the viewport are attached, so recycling still works as usual.
+ * RecyclerView LayoutManager for the Start screen. Placement comes from [MetroGridPacker]; every
+ * frame is computed up front (Start screens hold tens of tiles, not thousands) and only the
+ * tiles near the viewport are attached, so recycling still works as usual.
  */
 class MetroGridLayoutManager(
-    private val specOf: (position: Int) -> Spec
+    private val specOf: (position: Int) -> MetroGridPacker.Spec
 ) : RecyclerView.LayoutManager() {
-
-    /** A tile's footprint in cells, or a fixed pixel height for full-width rows. */
-    data class Spec(val cols: Int, val rows: Int, val fullWidthHeightPx: Int = 0)
 
     var columns = 6
         set(value) {
@@ -74,76 +66,17 @@ class MetroGridLayoutManager(
     }
 
     private fun computeFrames(count: Int): List<Rect> {
-        val pitch = cellPitch
-        val blockCols = columns / 2
-        val result = ArrayList<Rect>(count)
-        var groupTop = paddingTop.toFloat()
-        // Occupied 2×2 blocks of the current group, one BooleanArray per block row.
-        val blocks = ArrayList<BooleanArray>()
-        // [blockRow, blockCol, nextQuadrant] of the block that small tiles are currently filling.
-        var smallBlock: IntArray? = null
-
-        fun isFree(row: Int, col: Int, w: Int, h: Int): Boolean {
-            for (r in row until row + h) {
-                val line = blocks.getOrNull(r) ?: continue
-                for (c in col until col + w) if (line[c]) return false
-            }
-            return true
-        }
-
-        fun occupy(row: Int, col: Int, w: Int, h: Int) {
-            while (blocks.size < row + h) blocks.add(BooleanArray(blockCols))
-            for (r in row until row + h) for (c in col until col + w) blocks[r][c] = true
-        }
-
-        fun firstFit(w: Int, h: Int): Pair<Int, Int> {
-            var row = 0
-            while (true) {
-                for (col in 0..blockCols - w) if (isFree(row, col, w, h)) return row to col
-                row++
-            }
-        }
-
-        fun cellRect(cellRow: Int, cellCol: Int, cols: Int, rows: Int): Rect {
-            val left = paddingLeft + cellCol * pitch
-            val top = groupTop + cellRow * pitch
-            return Rect(
-                left.roundToInt(),
-                top.roundToInt(),
-                (left + cols * pitch - gutterPx).roundToInt(),
-                (top + rows * pitch - gutterPx).roundToInt()
-            )
-        }
-
-        for (position in 0 until count) {
-            val spec = specOf(position)
-            if (spec.fullWidthHeightPx > 0) {
-                val top = groupTop + blocks.size * 2 * pitch
-                result.add(Rect(paddingLeft, top.roundToInt(), width - paddingRight, (top + spec.fullWidthHeightPx).roundToInt()))
-                groupTop = top + spec.fullWidthHeightPx
-                blocks.clear()
-                smallBlock = null
-                continue
-            }
-            if (spec.cols <= 1 && spec.rows <= 1) {
-                val block = smallBlock ?: firstFit(1, 1).let { (r, c) ->
-                    occupy(r, c, 1, 1)
-                    intArrayOf(r, c, 0)
-                }
-                val quadrant = block[2]
-                result.add(cellRect(block[0] * 2 + quadrant / 2, block[1] * 2 + quadrant % 2, 1, 1))
-                block[2] = quadrant + 1
-                smallBlock = if (block[2] >= 4) null else block
-                continue
-            }
-            val w = ((spec.cols + 1) / 2).coerceIn(1, blockCols)
-            val h = ((spec.rows + 1) / 2).coerceAtLeast(1)
-            val (r, c) = firstFit(w, h)
-            occupy(r, c, w, h)
-            result.add(cellRect(r * 2, c * 2, w * 2, h * 2))
-        }
-        contentHeight = (groupTop + blocks.size * 2 * pitch).roundToInt() + paddingBottom
-        return result
+        val packed = MetroGridPacker.pack(
+            specs = List(count) { specOf(it) },
+            columns = columns,
+            pitch = cellPitch,
+            gutter = gutterPx,
+            originX = paddingLeft,
+            originY = paddingTop,
+            fullWidthRight = width - paddingRight
+        )
+        contentHeight = packed.contentBottom + paddingBottom
+        return packed.frames.map { Rect(it.left, it.top, it.right, it.bottom) }
     }
 
     private fun maxScroll(): Int = (contentHeight - height).coerceAtLeast(0)

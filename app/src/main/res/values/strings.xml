@@ -7,4 +7,6 @@
     <string name="step_2_select">2. Switch Active Keyboard</string>
     <string name="test_hint">Tap here to test typing with your keyboard...</string>
     <string name="customization_title">Ergonomic &amp; Privacy Ready</string>
+    <string name="gesture_service_name">Start gestures</string>
+    <string name="gesture_service_description">Lets the launcher lock the screen when you double-tap empty space on Start, and open notifications when you swipe down. It reads nothing on your screen.</string>
 </resources>

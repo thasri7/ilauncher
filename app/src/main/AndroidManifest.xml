@@ -1,11 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Notice: NO INTERNET PERMISSION for 100% offline privacy -->
+    <!-- Internet is used only by the launcher's Weather tile (Open-Meteo, no account or API key).
+         The keyboard sends nothing anywhere. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Optional: "Use my location" for weather. Asked for only when the user picks it. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- A home app has to list every launchable app; this is an allowed use on Google Play. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
     <!-- Lets "Uninstall" in tile and app menus open the system uninstall prompt. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- Swipe down on Start opens the notification shade. -->
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <!-- Optional: upcoming events on the Calendar tile. Asked for only when the user turns it on. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
 
     <application
         android:allowBackup="true"
@@ -56,6 +68,32 @@
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
+        </service>
+
+        <!-- Accepts "Add to Home screen" shortcuts from other apps and pins them to Start. -->
+        <activity
+            android:name=".PinShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Optional gesture helper for double-tap to lock. -->
+        <service
+            android:name=".launcher.LauncherGestureService"
+            android:exported="true"
+            android:label="@string/gesture_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/gesture_service" />
         </service>
 
         <!-- Setup & Settings Activity -->

@@ -24,18 +24,5 @@
     <color name="kb_key_border">#384454</color>
     <color name="kb_accent">#38BDF8</color>
     <!-- Square Home Metro Colors -->
-    <color name="metro_bg">#0A0D14</color>
-    <color name="metro_tile_bg">#161D29</color>
-    <color name="metro_tile_border">#2A3649</color>
-    <color name="metro_tile_pressed">#243042</color>
     <color name="metro_blue">#0078D7</color>
-    <color name="metro_cyan">#00B7C3</color>
-    <color name="metro_green">#107C41</color>
-    <color name="metro_orange">#D83B01</color>
-    <color name="metro_purple">#8764B8</color>
-    <color name="metro_magenta">#E3008C</color>
-    <color name="metro_yellow">#FFB900</color>
-    <color name="metro_glass">#221E293B</color>
-    <color name="metro_glass_stroke">#33475569</color>
-    <color name="metro_text_dim">#8E9BAE</color>
 </resources>

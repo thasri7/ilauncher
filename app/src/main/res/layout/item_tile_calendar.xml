@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Calendar tile: weekday and a huge day number, month / week details on the back. -->
+<!-- Calendar tile: weekday, huge day number and upcoming events; next event (or week details) on the back. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tile_surface"
     android:layout_width="match_parent"
@@ -24,14 +24,35 @@
             android:layout_height="0dp"
             android:layout_weight="1" />
 
-        <TextView
-            android:id="@+id/tv_cal_day"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="sans-serif-light"
-            android:includeFontPadding="false"
-            android:textColor="#FFFFFF"
-            android:textSize="56sp" />
+            android:gravity="bottom"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tv_cal_day"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-light"
+                android:includeFontPadding="false"
+                android:textColor="#FFFFFF"
+                android:textSize="56sp" />
+
+            <!-- Next events, on wide and large tiles when calendar access is allowed. -->
+            <TextView
+                android:id="@+id/tv_cal_events"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:lineSpacingExtra="2dp"
+                android:maxLines="5"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:visibility="gone" />
+        </LinearLayout>
     </LinearLayout>
 
     <LinearLayout
@@ -44,9 +65,11 @@
 
         <TextView
             android:id="@+id/tv_cal_month"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:ellipsize="end"
             android:fontFamily="sans-serif-light"
+            android:maxLines="2"
             android:textColor="#FFFFFF"
             android:textSize="20sp" />
 

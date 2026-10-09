@@ -8,6 +8,7 @@ import com.custom.keyboard.models.TileSize
 import com.custom.keyboard.models.TileType
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 
@@ -23,10 +24,14 @@ class TilePreferences(context: Context) {
     var tileOpacity by intPref("tile_opacity", 85)
     /** Black scrim over the wallpaper, in percent. */
     var wallpaperDim by intPref("wallpaper_dim", 35)
+    /** "wallpaper": tiles float over the system wallpaper; "picture": a picture shows only through the tiles. */
+    var backgroundMode by stringPref("background_mode", "wallpaper")
     var accentColor by stringPref("accent_color", "#0050EF")
     /** "accent" paints every tile with the accent, "icon" derives each app tile's colour from its icon. */
     var tileColorMode by stringPref("tile_color_mode", "accent")
     var themedIcons by boolPref("themed_icons", true)
+    /** Package of the selected icon pack, or "" for system icons. */
+    var iconPack by stringPref("icon_pack", "")
     var showLabels by boolPref("show_labels", true)
 
     // ── Motion ───────────────────────────────────────────────────────────────────────────
@@ -35,6 +40,22 @@ class TilePreferences(context: Context) {
     var liveTilesEnabled by boolPref("live_tiles_enabled", true)
     /** "slide", "cube" or "depth". */
     var pageTransition by stringPref("page_transition", "slide")
+
+    // ── Gestures ─────────────────────────────────────────────────────────────────────────
+    /** Swipe down at the top of Start: "notifications", "search" or "none". */
+    var swipeDownAction by stringPref("gesture_swipe_down", "notifications")
+    /** Double-tap on empty Start space: "lock" or "none". */
+    var doubleTapAction by stringPref("gesture_double_tap", "lock")
+
+    // ── Weather ──────────────────────────────────────────────────────────────────────────
+    var weatherPlace by stringPref("weather_place", "")
+    var weatherLatitude by stringPref("weather_lat", "")
+    var weatherLongitude by stringPref("weather_lon", "")
+    /** Follow the phone's approximate location instead of a fixed city. */
+    var weatherUseDevice by boolPref("weather_use_device", false)
+    /** "C" or "F"; defaults to Fahrenheit only where that is the norm. */
+    var weatherUnit by stringPref("weather_unit", if (Locale.getDefault().country in setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW")) "F" else "C")
+    var weatherCache by stringPref("weather_cache", "")
 
     // ── Behaviour ────────────────────────────────────────────────────────────────────────
     var autoGrowEnabled by boolPref("auto_grow_enabled", true)
@@ -47,14 +68,17 @@ class TilePreferences(context: Context) {
     fun loadTiles(): MutableList<TileItem> {
         val raw = prefs.getString("tiles_json", null)
         if (raw.isNullOrEmpty()) return getDefaultTiles()
-        val list = mutableListOf<TileItem>()
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                parseTile(arr.getJSONObject(i))?.let { list.add(it) }
-            }
+        return try {
+            parseTiles(JSONArray(raw))
         } catch (_: Exception) {
-            return getDefaultTiles()
+            getDefaultTiles()
+        }
+    }
+
+    private fun parseTiles(arr: JSONArray): MutableList<TileItem> {
+        val list = mutableListOf<TileItem>()
+        for (i in 0 until arr.length()) {
+            parseTile(arr.getJSONObject(i))?.let { list.add(it) }
         }
         return list
     }
@@ -65,12 +89,12 @@ class TilePreferences(context: Context) {
         // hard-coded colours; migrate them to real tile sizes and let them follow the accent.
         val isLegacy = !obj.has("size")
         val size = if (isLegacy) {
-            legacySize(obj.optInt("spanX", 1), obj.optInt("spanY", 1))
+            TileSize.fromLegacySpans(obj.optInt("spanX", 1), obj.optInt("spanY", 1))
         } else {
             runCatching { TileSize.valueOf(obj.getString("size")) }.getOrDefault(TileSize.MEDIUM)
         }
         val color = if (isLegacy) null else obj.optString("accentColorHex", "").takeIf { it.isNotEmpty() }
-        return TileItem(
+        val tile = TileItem(
             id = obj.getString("id"),
             type = type,
             title = obj.optString("title", ""),
@@ -80,17 +104,15 @@ class TilePreferences(context: Context) {
             customSubtitle = obj.optString("customSubtitle", ""),
             launchCount = obj.optInt("launchCount", 0),
             contactPhone = obj.optString("contactPhone", ""),
-            liveEnabled = obj.optBoolean("liveEnabled", true)
+            liveEnabled = obj.optBoolean("liveEnabled", true),
+            shortcutId = obj.optString("shortcutId").takeIf { it.isNotEmpty() },
+            appWidgetId = obj.optInt("appWidgetId", -1)
         )
+        obj.optJSONArray("children")?.let { tile.children.addAll(parseTiles(it)) }
+        return tile
     }
 
-    private fun legacySize(spanX: Int, spanY: Int): TileSize = when {
-        spanX >= 2 && spanY >= 2 -> TileSize.LARGE
-        spanX >= 2 -> TileSize.WIDE
-        else -> TileSize.MEDIUM
-    }
-
-    fun saveTiles(tiles: List<TileItem>) {
+    private fun tilesToJson(tiles: List<TileItem>): JSONArray {
         val arr = JSONArray()
         for (tile in tiles) {
             val obj = JSONObject().apply {
@@ -104,10 +126,17 @@ class TilePreferences(context: Context) {
                 put("launchCount", tile.launchCount)
                 put("contactPhone", tile.contactPhone)
                 put("liveEnabled", tile.liveEnabled)
+                put("shortcutId", tile.shortcutId ?: "")
+                put("appWidgetId", tile.appWidgetId)
+                if (tile.children.isNotEmpty()) put("children", tilesToJson(tile.children))
             }
             arr.put(obj)
         }
-        prefs.edit().putString("tiles_json", arr.toString()).apply()
+        return arr
+    }
+
+    fun saveTiles(tiles: List<TileItem>) {
+        prefs.edit().putString("tiles_json", tilesToJson(tiles).toString()).apply()
     }
 
     /** Launch counts for every app, pinned or not; feeds "Most used" in All apps. */
@@ -130,7 +159,7 @@ class TilePreferences(context: Context) {
         usage[packageName] = (usage[packageName] ?: 0) + 1
         prefs.edit().putString("usage_json", JSONObject(usage).toString()).apply()
 
-        val tile = tiles.firstOrNull { it.packageName == packageName } ?: return null
+        val tile = tiles.firstOrNull { it.packageName == packageName && it.shortcutId == null } ?: return null
         tile.launchCount++
         var grown: TileItem? = null
         if (autoGrowEnabled && tile.launchCount >= 5 && tile.size == TileSize.SMALL) {
@@ -139,6 +168,78 @@ class TilePreferences(context: Context) {
         }
         saveTiles(tiles)
         return grown
+    }
+
+    // ── Shortcuts pinned by other apps (e.g. "Add to Home screen" in a browser) ──────────
+
+    data class PendingPin(val packageName: String, val shortcutId: String, val label: String)
+
+    fun queuePinnedShortcut(pin: PendingPin) {
+        val arr = runCatching { JSONArray(prefs.getString("pending_pins", "[]")) }.getOrDefault(JSONArray())
+        arr.put(JSONObject().put("pkg", pin.packageName).put("id", pin.shortcutId).put("label", pin.label))
+        prefs.edit().putString("pending_pins", arr.toString()).apply()
+    }
+
+    fun takePendingPins(): List<PendingPin> {
+        val raw = prefs.getString("pending_pins", null) ?: return emptyList()
+        prefs.edit().remove("pending_pins").apply()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                PendingPin(o.getString("pkg"), o.getString("id"), o.optString("label"))
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    // ── Backup & restore ─────────────────────────────────────────────────────────────────
+
+    /** Every launcher setting plus the tile layout, as JSON. Pictures and widgets are not included. */
+    fun exportJson(): String {
+        val settings = JSONObject()
+        for ((key, value) in prefs.all) {
+            if (key == "pending_pins") continue
+            val typed = when (value) {
+                is Boolean -> JSONObject().put("t", "b").put("v", value)
+                is Int -> JSONObject().put("t", "i").put("v", value)
+                is Long -> JSONObject().put("t", "l").put("v", value)
+                is Float -> JSONObject().put("t", "f").put("v", value.toDouble())
+                is String -> JSONObject().put("t", "s").put("v", value)
+                else -> null
+            }
+            if (typed != null) settings.put(key, typed)
+        }
+        return JSONObject()
+            .put("format", "ilauncher-start")
+            .put("version", 2)
+            .put("settings", settings)
+            .toString(2)
+    }
+
+    /**
+     * Replaces settings and layout with a backup made by [exportJson]. Widget tiles are dropped
+     * because widget ids belong to this install. Returns false if the file isn't a backup.
+     */
+    fun importJson(raw: String): Boolean {
+        val root = runCatching { JSONObject(raw) }.getOrNull() ?: return false
+        if (root.optString("format") != "ilauncher-start") return false
+        val settings = root.optJSONObject("settings") ?: return false
+        val editor = prefs.edit().clear()
+        for (key in settings.keys()) {
+            val typed = settings.optJSONObject(key) ?: continue
+            when (typed.optString("t")) {
+                "b" -> editor.putBoolean(key, typed.optBoolean("v"))
+                "i" -> editor.putInt(key, typed.optInt("v"))
+                "l" -> editor.putLong(key, typed.optLong("v"))
+                "f" -> editor.putFloat(key, typed.optDouble("v").toFloat())
+                "s" -> editor.putString(key, typed.optString("v"))
+            }
+        }
+        editor.putBoolean("apps_seeded", true)
+        editor.apply()
+        val tiles = loadTiles().filter { it.type != TileType.WIDGET }
+        saveTiles(tiles)
+        return true
     }
 
     fun resetToDefaults(): MutableList<TileItem> {
@@ -150,8 +251,9 @@ class TilePreferences(context: Context) {
     private fun getDefaultTiles(): MutableList<TileItem> = mutableListOf(
         TileItem(id = "clock_tile", type = TileType.CLOCK_WEATHER, title = "Clock", size = TileSize.WIDE),
         TileItem(id = "calendar_tile", type = TileType.CALENDAR_BIG, title = "Calendar", size = TileSize.MEDIUM),
-        TileItem(id = "search_tile", type = TileType.EXPRESS_SEARCH, title = "Search", size = TileSize.WIDE),
+        TileItem(id = "weather_tile", type = TileType.WEATHER_LIVE, title = "Weather", size = TileSize.WIDE),
         TileItem(id = "battery_tile", type = TileType.BATTERY_STATUS, title = "Battery", size = TileSize.MEDIUM),
+        TileItem(id = "search_tile", type = TileType.EXPRESS_SEARCH, title = "Search", size = TileSize.WIDE),
         TileItem(id = "media_tile", type = TileType.MEDIA_PLAYER, title = "Music", size = TileSize.WIDE),
         TileItem(id = "storage_tile", type = TileType.STORAGE_STATS, title = "Device", size = TileSize.MEDIUM),
         TileItem(

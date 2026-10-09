@@ -7,50 +7,123 @@ import android.graphics.Color
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
- * Loads app icons once and hands out independent copies, so two views never share drawable
- * state. Also derives a tile colour from an icon and, on Android 13+, the white "themed" glyph
- * that makes tiles look like real Windows 10 Mobile tiles.
+ * Loads app icons once, off the main thread, and hands out independent copies so two views never
+ * share drawable state. Applies the selected icon pack, offers the Android 13 white "themed"
+ * glyph, derives a tile colour from an icon, and caches app-shortcut icons.
  */
 class IconCache(private val context: Context) {
     private val packageManager = context.packageManager
-    private val loaded = HashMap<String, Drawable>()
-    private val colors = HashMap<String, Int?>()
+    private val loaded = ConcurrentHashMap<String, Drawable>()
+    private val fromPack = ConcurrentHashMap.newKeySet<String>()
+    private val colors = ConcurrentHashMap<String, Int>()
+    private val noColor = ConcurrentHashMap.newKeySet<String>()
+    private val executor = Executors.newFixedThreadPool(2)
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile
+    private var pack: IconPacks.Loaded? = null
 
-    private fun load(packageName: String): Drawable? = loaded[packageName] ?: try {
-        packageManager.getApplicationIcon(packageName).also { loaded[packageName] = it }
-    } catch (_: Exception) {
-        null
+    /** Switches icon pack ("" = system icons) and drops cached icons. */
+    fun setIconPack(packPackage: String, onReady: () -> Unit) {
+        executor.execute {
+            pack = packPackage.takeIf { it.isNotEmpty() }?.let { IconPacks.load(context, it) }
+            clear()
+            main.post(onReady)
+        }
+    }
+
+    private fun load(packageName: String): Drawable? = loaded[packageName] ?: run {
+        val packIcon = pack?.let { p ->
+            val activity = try {
+                packageManager.getLaunchIntentForPackage(packageName)?.component?.className
+            } catch (_: Exception) {
+                null
+            }
+            p.drawableFor(packageName, activity)
+        }
+        val icon = packIcon ?: try {
+            packageManager.getApplicationIcon(packageName)
+        } catch (_: Exception) {
+            null
+        }
+        icon?.also {
+            loaded[packageName] = it
+            if (packIcon != null) fromPack.add(packageName) else fromPack.remove(packageName)
+        }
     }
 
     private fun copyOf(d: Drawable): Drawable = d.constantState?.newDrawable(context.resources)?.mutate() ?: d
 
+    fun isCached(packageName: String?): Boolean = packageName != null && loaded.containsKey(packageName)
+
+    /** Synchronous icon; loads on the calling thread when it isn't cached yet. */
     fun icon(packageName: String?): Drawable {
         val d = packageName?.let { load(it) } ?: return packageManager.defaultActivityIcon
         return copyOf(d)
     }
 
-    /** The adaptive icon's monochrome layer tinted white, or null when the app doesn't ship one. */
+    /**
+     * Delivers the icon (themed when asked and available) on the main thread: immediately when
+     * cached, otherwise after loading it in the background.
+     */
+    fun iconAsync(packageName: String?, themed: Boolean, callback: (Drawable, Boolean) -> Unit) {
+        if (packageName == null) {
+            callback(packageManager.defaultActivityIcon, false)
+            return
+        }
+        if (isCached(packageName)) {
+            val t = if (themed) themedIcon(packageName) else null
+            callback(t ?: icon(packageName), t != null)
+            return
+        }
+        executor.execute {
+            load(packageName)
+            main.post {
+                val t = if (themed) themedIcon(packageName) else null
+                callback(t ?: icon(packageName), t != null)
+            }
+        }
+    }
+
+    /** Warms the cache for these packages in the background. */
+    fun prefetch(packages: Collection<String>) {
+        val todo = packages.filter { !loaded.containsKey(it) }
+        if (todo.isEmpty()) return
+        executor.execute { todo.forEach { load(it) } }
+    }
+
+    /**
+     * The adaptive icon's monochrome layer tinted white, or null when the app doesn't ship one
+     * (or an icon pack supplies the icon, which wins).
+     */
     fun themedIcon(packageName: String?): Drawable? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
-        val adaptive = packageName?.let { load(it) } as? AdaptiveIconDrawable ?: return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || packageName == null) return null
+        val base = load(packageName) ?: return null
+        if (packageName in fromPack) return null
+        val adaptive = base as? AdaptiveIconDrawable ?: return null
         val mono = (copyOf(adaptive) as? AdaptiveIconDrawable)?.monochrome ?: return null
         return mono.mutate().apply { setTint(Color.WHITE) }
     }
 
     /** A saturated, white-text-friendly colour sampled from the app icon, or null for grey icons. */
     fun tileColor(packageName: String?): Int? {
-        if (packageName == null) return null
-        if (colors.containsKey(packageName)) return colors[packageName]
+        if (packageName == null || packageName in noColor) return null
+        colors[packageName]?.let { return it }
         val color = load(packageName)?.let { sampleColor(copyOf(it)) }
-        colors[packageName] = color
+        if (color == null) noColor.add(packageName) else colors[packageName] = color
         return color
     }
 
     fun clear() {
         loaded.clear()
+        fromPack.clear()
         colors.clear()
+        noColor.clear()
     }
 
     private fun sampleColor(d: Drawable): Int? {

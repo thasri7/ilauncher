@@ -48,6 +48,8 @@ class AppDrawerAdapter(
     }
 
     private var rows: List<Row> = emptyList()
+    /** Bumped when icons change (icon pack switch) so every row reloads its icon. */
+    private var iconGeneration = 0
 
     /** Letters that currently have at least one app, for the jump list. */
     var lettersPresent: Set<Char> = emptySet()
@@ -74,6 +76,12 @@ class AppDrawerAdapter(
             lettersPresent = byLetter.keys
         }
         rows = out
+        notifyDataSetChanged()
+    }
+
+    @SuppressLint("NotifyDataSetChanged")
+    fun invalidateIcons() {
+        iconGeneration++
         notifyDataSetChanged()
     }
 
@@ -126,14 +134,16 @@ class AppDrawerAdapter(
         private val icon: ImageView = view.findViewById(R.id.iv_drawer_icon)
         private val name: TextView = view.findViewById(R.id.tv_drawer_name)
         private val pin: ImageView = view.findViewById(R.id.iv_drawer_pin)
-        private var boundPackage: String? = null
+        private var boundKey: String? = null
 
         @SuppressLint("ClickableViewAccessibility")
         fun bind(app: AppLauncherHelper.AppEntry) {
             name.text = app.name
-            if (boundPackage != app.packageName) {
-                icon.setImageDrawable(icons.icon(app.packageName))
-                boundPackage = app.packageName
+            val key = "${app.packageName}#$iconGeneration"
+            if (boundKey != key) {
+                boundKey = key
+                icon.setImageDrawable(null)
+                icons.iconAsync(app.packageName, themed = false) { d, _ -> if (boundKey == key) icon.setImageDrawable(d) }
             }
             pin.visibility = if (isPinned(app.packageName)) View.VISIBLE else View.GONE
             pin.imageTintList = ColorStateList.valueOf(accent())

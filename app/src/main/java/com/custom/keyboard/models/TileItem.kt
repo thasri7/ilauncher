@@ -12,7 +12,13 @@ enum class TileType {
     EXPRESS_SEARCH,
     APP_SHORTCUT,
     KEYBOARD_SETTINGS,
-    DEVICE_SETTINGS
+    DEVICE_SETTINGS,
+    /** A W10M tile folder; its apps live in [TileItem.children]. */
+    FOLDER,
+    /** Slideshow of photos the user picked. */
+    PHOTOS,
+    /** An Android home-screen widget hosted inside a tile. */
+    WIDGET
 }
 
 /**
@@ -32,6 +38,18 @@ enum class TileSize(val cols: Int, val rows: Int, val label: String) {
         WIDE -> LARGE
         LARGE -> MEDIUM
     }
+
+    companion object {
+        /**
+         * Maps a tile saved by the old 2-column launcher (spanX/spanY of 1–2 half-width columns)
+         * to the closest real tile size.
+         */
+        fun fromLegacySpans(spanX: Int, spanY: Int): TileSize = when {
+            spanX >= 2 && spanY >= 2 -> LARGE
+            spanX >= 2 -> WIDE
+            else -> MEDIUM
+        }
+    }
 }
 
 data class TileItem(
@@ -45,5 +63,11 @@ data class TileItem(
     var customSubtitle: String = "",
     var launchCount: Int = 0,
     var contactPhone: String = "",
-    var liveEnabled: Boolean = true
+    var liveEnabled: Boolean = true,
+    /** App shortcut (deep link) id when this app tile opens a shortcut instead of the app. */
+    var shortcutId: String? = null,
+    /** Bound widget id for WIDGET tiles, or -1. */
+    var appWidgetId: Int = -1,
+    /** Apps inside a FOLDER tile. */
+    val children: MutableList<TileItem> = mutableListOf()
 )

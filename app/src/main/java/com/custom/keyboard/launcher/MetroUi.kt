@@ -10,6 +10,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
@@ -116,6 +117,48 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
             })
             setOnClickListener { onClick() }
         }
+
+    /**
+     * A row with an arbitrary drawable icon (app shortcuts, widgets) and an optional trailing
+     * glyph button, e.g. "pin this shortcut".
+     */
+    fun actionWithIcon(
+        icon: Drawable?,
+        title: String,
+        subtitle: String? = null,
+        trailingIcon: Int? = null,
+        trailingDescription: String? = null,
+        onTrailing: (() -> Unit)? = null,
+        onClick: () -> Unit
+    ): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(52)
+        setPadding(dp(18), dp(6), dp(8), dp(6))
+        background = ripple()
+        addView(ImageView(context).apply {
+            setImageDrawable(icon)
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+        })
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(14) }
+            addView(text(title, 15f).apply { maxLines = 1 })
+            if (!subtitle.isNullOrEmpty()) addView(text(subtitle, 12f, 0x99FFFFFF.toInt()).apply { maxLines = 1 })
+        })
+        if (trailingIcon != null && onTrailing != null) {
+            addView(ImageView(context).apply {
+                setImageDrawable(ContextCompat.getDrawable(context, trailingIcon))
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+                contentDescription = trailingDescription
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                background = ripple()
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+                setOnClickListener { onTrailing() }
+            })
+        }
+        setOnClickListener { onClick() }
+    }
 
     fun divider(): View = View(context).apply {
         setBackgroundColor(0x1FFFFFFF)
