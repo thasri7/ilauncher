@@ -28,6 +28,7 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -1011,11 +1012,27 @@ class LauncherActivity : AppCompatActivity() {
             return a !== b && a.type == TileType.APP_SHORTCUT && (b.type == TileType.APP_SHORTCUT || b.holdsApps)
         }
 
-        /** Dropping in the middle of a tile makes a folder; near its edges just moves past it. */
-        private fun centredOver(dragged: View, target: View): Boolean {
-            val dx = dragged.left + dragged.translationX + dragged.width / 2f - (target.left + target.width / 2f)
-            val dy = dragged.top + dragged.translationY + dragged.height / 2f - (target.top + target.height / 2f)
-            return abs(dx) < target.width * 0.25f && abs(dy) < target.height * 0.25f
+        /** Where the dragged tile's centre is right now (it moves by translation while dragged). */
+        private fun centreOf(dragged: View): Pair<Float, Float> =
+            (dragged.left + dragged.translationX + dragged.width / 2f) to (dragged.top + dragged.translationY + dragged.height / 2f)
+
+        /** The middle of a tile (inner 60%): dropping there makes a folder. */
+        private fun inMergeZone(dragged: View, target: View): Boolean {
+            val (cx, cy) = centreOf(dragged)
+            val insetX = target.width * 0.2f
+            val insetY = target.height * 0.2f
+            return cx > target.left + insetX && cx < target.right - insetX && cy > target.top + insetY && cy < target.bottom - insetY
+        }
+
+        /** The tile under the dragged tile's centre, if dropping there could make a folder. */
+        private fun mergeCandidate(rv: RecyclerView, dragged: RecyclerView.ViewHolder): RecyclerView.ViewHolder? {
+            for (i in rv.childCount - 1 downTo 0) {
+                val child = rv.getChildAt(i) ?: continue
+                if (child === dragged.itemView || child.width == 0) continue
+                val holder = rv.getChildViewHolder(child) ?: continue
+                if (canMerge(dragged, holder) && inMergeZone(dragged.itemView, child)) return holder
+            }
+            return null
         }
 
         private fun setMergeTarget(target: RecyclerView.ViewHolder?) {
@@ -1023,14 +1040,32 @@ class LauncherActivity : AppCompatActivity() {
             tileAdapter.setMergeHighlight(mergeTarget, on = false)
             mergeTarget = target
             tileAdapter.setMergeHighlight(target, on = true)
+            if (target != null) target.itemView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         }
 
+        /** An app tile the dragged app has been over without reaching its middle, and since when. */
+        private var hovering: RecyclerView.ViewHolder? = null
+        private var hoverSince = 0L
+
         override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
-            if (canMerge(viewHolder, target) && centredOver(viewHolder.itemView, target.itemView)) {
-                setMergeTarget(target)
-                return false
+            // Over the middle of an app or folder: make a folder on drop, don't swap.
+            if (mergeTarget != null) return false
+            if (canMerge(viewHolder, target)) {
+                if (inMergeZone(viewHolder.itemView, target.itemView)) {
+                    setMergeTarget(target)
+                    return false
+                }
+                // Give the finger a moment to reach the middle before tiles make room, so an
+                // app can always be dropped onto another app, whatever their sizes.
+                val now = SystemClock.uptimeMillis()
+                if (hovering !== target) {
+                    hovering = target
+                    hoverSince = now
+                    return false
+                }
+                if (now - hoverSince < 320) return false
             }
-            setMergeTarget(null)
+            hovering = null
             val from = viewHolder.bindingAdapterPosition
             val to = target.bindingAdapterPosition
             if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
@@ -1048,8 +1083,10 @@ class LauncherActivity : AppCompatActivity() {
             isCurrentlyActive: Boolean
         ) {
             super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
-            val target = mergeTarget ?: return
-            if (!centredOver(viewHolder.itemView, target.itemView)) setMergeTarget(null)
+            if (actionState != ItemTouchHelper.ACTION_STATE_DRAG || !isCurrentlyActive) return
+            // Checked every frame, not only when the grid wants to swap, so the folder target
+            // lights up as soon as the dragged app's centre is over another app.
+            setMergeTarget(mergeCandidate(recyclerView, viewHolder))
         }
 
         override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
@@ -1063,6 +1100,7 @@ class LauncherActivity : AppCompatActivity() {
             super.clearView(recyclerView, viewHolder)
             val target = mergeTarget
             mergeTarget = null
+            hovering = null
             val dragged = tileAdapter.tileAt(viewHolder.bindingAdapterPosition)
             val into = target?.let { tileAdapter.tileAt(it.bindingAdapterPosition) }
             tileAdapter.settle(viewHolder)
