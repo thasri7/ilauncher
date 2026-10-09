@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/keyboard_outer_frame"
+    tools:ignore="UseAppTint"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@color/kb_bg">
@@ -16,177 +18,116 @@
         android:paddingTop="2dp"
         android:paddingBottom="8dp">
 
-        <!-- Fold / Unfold Slim Header (Shown when toolbar is folded) -->
+        <!-- Collapsed toolbar: a slim handle to bring it back. -->
         <LinearLayout
             android:id="@+id/fold_bar"
             android:layout_width="match_parent"
-            android:layout_height="26dp"
-            android:visibility="gone"
+            android:layout_height="22dp"
+            android:background="@color/kb_bg"
             android:gravity="center"
-            android:background="@color/kb_toolbar_bg">
+            android:visibility="gone">
 
-            <TextView
+            <ImageView
                 android:id="@+id/btn_unfold"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="▴ Tap to unfold toolbar"
-                android:textColor="@color/kb_accent"
-                android:textSize="11sp" />
+                android:layout_width="48dp"
+                android:layout_height="22dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Show toolbar"
+                android:padding="2dp"
+                android:src="@drawable/ic_kb_expand"
+                android:tint="@color/kb_text_secondary" />
         </LinearLayout>
 
-        <!-- Top Action Toolbar -->
-        <!-- Top Action Toolbar (Clean Gboard/Cyber-Glass Icon Bar) -->
+        <!-- Toolbar: line icons, most used first; scrolls sideways for the rest. -->
         <HorizontalScrollView
             android:id="@+id/top_toolbar_scroll"
             android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:scrollbars="none"
+            android:layout_height="44dp"
+            android:fadingEdgeLength="24dp"
             android:overScrollMode="never"
-            android:background="@color/kb_toolbar_bg"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:layout_marginBottom="2dp">
+            android:requiresFadingEdge="horizontal"
+            android:scrollbars="none">
 
             <LinearLayout
                 android:id="@+id/toolbar_container"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
                 android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:paddingStart="2dp"
+                android:paddingEnd="2dp">
 
-                <!-- 1. Grid Menu / All Features Toggle (Like Gboard 4-box icon) -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_fold"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="⊞"
-                    android:textColor="@color/kb_accent"
-                    android:textSize="18sp"
-                    android:textStyle="bold" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Hide toolbar"
+                    android:src="@drawable/ic_kb_collapse" />
 
-                <!-- 2. Voice Input (Mic icon in round pill) -->
-                <TextView
-                    android:id="@+id/action_voice"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="🎙️"
-                    android:textSize="14sp" />
-
-                <!-- 3. Clipboard History -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_clips"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="📋"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Clipboard"
+                    android:src="@drawable/ic_kb_clipboard" />
 
-                <!-- 4. Quick Phrases -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_quick"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="💬"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Quick replies"
+                    android:src="@drawable/ic_kb_chat" />
 
-                <!-- 5. Instant Translator -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_translate"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="🌐"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Translate"
+                    android:src="@drawable/ic_kb_translate" />
 
-                <!-- 6. Launch Apps Drawer -->
-                <TextView
-                    android:id="@+id/action_apps"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="🚀"
-                    android:textSize="14sp" />
-
-                <!-- 7. Fancy Fonts -->
-                <TextView
-                    android:id="@+id/action_fancy"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="✨"
-                    android:textSize="14sp" />
-
-                <!-- 8. Cursor D-pad & Text Select/Cut/Copy Mode -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_focus"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="🎯"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Cursor and selection"
+                    android:src="@drawable/ic_kb_cursor" />
 
-                <!-- 9. One-Handed / Float Mode -->
-                <TextView
+                <ImageView
+                    android:id="@+id/action_fancy"
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Fancy text"
+                    android:src="@drawable/ic_kb_fonts" />
+
+                <ImageView
+                    android:id="@+id/action_voice"
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Voice typing"
+                    android:src="@drawable/ic_kb_mic" />
+
+                <ImageView
                     android:id="@+id/action_one_hand"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="🪟"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="One-handed mode"
+                    android:src="@drawable/ic_kb_onehand" />
 
-                <!-- 10. Undo -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_undo"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="↩️"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Undo delete"
+                    android:src="@drawable/ic_kb_undo" />
 
-                <!-- 11. Settings -->
-                <TextView
+                <ImageView
+                    android:id="@+id/action_apps"
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Open an app"
+                    android:src="@drawable/ic_m_apps" />
+
+                <ImageView
                     android:id="@+id/action_settings"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp"
-                    android:text="⚙️"
-                    android:textSize="14sp" />
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Keyboard settings"
+                    android:src="@drawable/ic_m_settings" />
 
-                <!-- 12. Switch Keyboard -->
-                <TextView
+                <ImageView
                     android:id="@+id/action_switch_ime"
-                    android:layout_width="34dp"
-                    android:layout_height="32dp"
-                    android:background="@drawable/bg_toolbar_icon"
-                    android:gravity="center"
-                    android:text="⌨️"
-                    android:textSize="14sp" />
-
+                    style="@style/KbToolbarIcon"
+                    android:contentDescription="Switch keyboard"
+                    android:src="@drawable/ic_m_keyboard" />
             </LinearLayout>
         </HorizontalScrollView>
 

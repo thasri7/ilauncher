@@ -15,6 +15,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -41,6 +42,21 @@ val METRO_ACCENTS: List<Pair<String, String>> = listOf(
 class MetroUi(val context: Context, private val accentProvider: () -> Int) {
     val accent: Int get() = accentProvider()
 
+    /** The accent lifted towards white so it stays readable as text on the dark menus. */
+    val accentText: Int
+        get() {
+            val c = accent
+            val hsv = FloatArray(3)
+            Color.colorToHSV(c, hsv)
+            if (hsv[2] > 0.85f && hsv[1] < 0.7f) return c
+            val mix = 0.45f
+            return Color.rgb(
+                (Color.red(c) + (255 - Color.red(c)) * mix).toInt(),
+                (Color.green(c) + (255 - Color.green(c)) * mix).toInt(),
+                (Color.blue(c) + (255 - Color.blue(c)) * mix).toInt()
+            )
+        }
+
     fun dp(value: Float): Int = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics).toInt()
     fun dp(value: Int): Int = dp(value.toFloat())
 
@@ -51,16 +67,18 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
     fun ripple(base: Int = Color.TRANSPARENT): RippleDrawable =
         RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), ColorDrawable(base), ColorDrawable(Color.WHITE))
 
-    /** Flat flyout surface with a hairline border, as used by W10M menus. */
+    /** Menu surface: dark acrylic with soft corners and a hairline edge. */
     fun card(): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         background = GradientDrawable().apply {
-            setColor(0xFA1C1C1E.toInt())
-            setStroke(dp(1), 0x26FFFFFF)
+            setColor(0xF5202124.toInt())
+            setStroke(dp(1), 0x1FFFFFFF)
+            cornerRadius = dp(14).toFloat()
         }
+        clipToOutline = true
         isClickable = true
-        elevation = dp(12).toFloat()
-        setPadding(0, dp(6), 0, dp(6))
+        elevation = dp(16).toFloat()
+        setPadding(0, dp(8), 0, dp(8))
     }
 
     fun text(value: CharSequence, sizeSp: Float, color: Int = Color.WHITE, face: Typeface = regular): TextView =
@@ -77,14 +95,17 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
 
     fun header(title: String, subtitle: String? = null): View = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(18), dp(10), dp(18), dp(8))
-        addView(text(title, 20f, face = light).apply { maxLines = 1 })
-        if (!subtitle.isNullOrEmpty()) addView(text(subtitle, 12f, 0x99FFFFFF.toInt()))
+        setPadding(dp(20), dp(10), dp(20), dp(10))
+        addView(text(title, 21f, face = light).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        })
+        if (!subtitle.isNullOrEmpty()) addView(text(subtitle, 13f, 0x99FFFFFF.toInt()).apply { setPadding(0, dp(2), 0, 0) })
     }
 
-    fun sectionTitle(value: String): TextView = text(value.uppercase(), 12f, accent, medium).apply {
-        letterSpacing = 0.12f
-        setPadding(dp(20), dp(22), dp(20), dp(6))
+    fun sectionTitle(value: String): TextView = text(value.uppercase(), 12f, accentText, medium).apply {
+        letterSpacing = 0.1f
+        setPadding(dp(20), dp(18), dp(20), dp(6))
     }
 
     fun caption(value: String): TextView = text(value, 12f, 0x99FFFFFF.toInt()).apply {
@@ -102,15 +123,15 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(52)
-            setPadding(dp(18), dp(8), dp(18), dp(8))
+            minimumHeight = dp(50)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
             background = ripple()
             val color = if (danger) 0xFFFF6B5E.toInt() else Color.WHITE
-            if (iconRes != null) addView(icon(iconRes, tint = color))
+            if (iconRes != null) addView(icon(iconRes, 20, tint = if (danger) color else 0xE6FFFFFF.toInt()))
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginStart = if (iconRes != null) dp(16) else 0
+                    marginStart = if (iconRes != null) dp(18) else 0
                 }
                 addView(text(title, 15f, color))
                 if (!subtitle.isNullOrEmpty()) addView(text(subtitle, 12f, 0x99FFFFFF.toInt()))
@@ -168,8 +189,12 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         }
     }
 
-    /** Single-choice chips; the selection updates in place before [onPick] runs. */
+    /**
+     * Single-choice options; the selection updates in place before [onPick] runs. Up to four
+     * short options render as a full-width segmented control, longer sets scroll sideways.
+     */
     fun chips(options: List<String>, selected: Int, onPick: (Int) -> Unit): View {
+        val segmented = options.size <= 4 && options.all { it.length <= 14 }
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(16), dp(4), dp(16), dp(8))
@@ -177,20 +202,26 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         val chips = options.map { label ->
             text(label, 13f, face = medium).apply {
                 gravity = Gravity.CENTER
-                minWidth = dp(56)
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginEnd = dp(8)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                layoutParams = if (segmented) {
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
+                } else {
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) }
                 }
+                if (!segmented) minWidth = dp(56)
             }
         }
         fun paint(sel: Int) = chips.forEachIndexed { i, chip ->
-            chip.background = GradientDrawable().apply {
-                if (i == sel) setColor(accent) else {
-                    setColor(0x14FFFFFF)
-                    setStroke(dp(1), 0x40FFFFFF)
-                }
-            }
+            chip.background = RippleDrawable(
+                ColorStateList.valueOf(0x33FFFFFF),
+                GradientDrawable().apply {
+                    cornerRadius = dp(8).toFloat()
+                    if (i == sel) setColor(accent) else setColor(0x1AFFFFFF)
+                },
+                null
+            )
         }
         paint(selected)
         chips.forEachIndexed { i, chip ->
@@ -199,6 +230,10 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
                 onPick(i)
             }
             row.addView(chip)
+        }
+        if (segmented) {
+            (chips.lastOrNull()?.layoutParams as? LinearLayout.LayoutParams)?.marginEnd = 0
+            return row
         }
         return HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -225,8 +260,10 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
                 if (i < chunk.size) {
                     cell.background = GradientDrawable().apply {
                         setColor(color ?: accent)
+                        cornerRadius = dp(6).toFloat()
                         if (color == null) setStroke(dp(2), Color.WHITE)
                     }
+                    cell.clipToOutline = true
                     if (color == null) {
                         cell.addView(text("A", 15f, face = medium).apply {
                             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
@@ -286,6 +323,7 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         background = GradientDrawable().apply {
             setColor(0x1AFFFFFF)
             setStroke(dp(2), accent)
+            cornerRadius = dp(8).toFloat()
         }
         setPadding(dp(12), dp(10), dp(12), dp(10))
     }
@@ -297,9 +335,10 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         background = RippleDrawable(
             ColorStateList.valueOf(0x33FFFFFF),
             GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
                 if (filled) setColor(accent) else {
                     setColor(0x14FFFFFF)
-                    setStroke(dp(2), 0x66FFFFFF)
+                    setStroke(dp(1), 0x4DFFFFFF)
                 }
             },
             null

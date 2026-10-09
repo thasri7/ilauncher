@@ -61,6 +61,16 @@ class TilePreferences(context: Context) {
     var weatherCache by stringPref("weather_cache", "")
 
     // ── Behaviour ────────────────────────────────────────────────────────────────────────
+    /** Locks Start so tiles can't be moved, resized or unpinned by accident. */
+    var layoutLocked by boolPref("layout_locked", false)
+    /** Moves the wallpaper as Start scrolls and pages (when the wallpaper supports it). */
+    var wallpaperParallax by boolPref("wallpaper_parallax", true)
+    var hideStatusBar by boolPref("hide_status_bar", false)
+    /** All apps: "list" or "grid". */
+    var drawerStyle by stringPref("drawer_style", "list")
+    /** All apps order: "az", "used" or "recent". */
+    var drawerSort by stringPref("drawer_sort", "az")
+    var showRecentlyAdded by boolPref("show_recently_added", true)
     /** "Suggested now" strip at the top of Start. */
     var suggestionsEnabled by boolPref("suggestions_enabled", true)
     var autoGrowEnabled by boolPref("auto_grow_enabled", true)

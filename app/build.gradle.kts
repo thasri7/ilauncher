@@ -46,6 +46,9 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.cardview:cardview:1.0.0")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
+    // On-device translation and language detection for the keyboard's translate panel.
+    implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.google.mlkit:language-id:17.0.6")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json for unit tests (android.jar only has stubs).

@@ -31,16 +31,26 @@ class MetroOverlay(private val host: FrameLayout, private val insets: () -> Rect
     private var style = Style.SHEET
     private var hingeTop = true
     private var onDismissed: (() -> Unit)? = null
+    /** Lets a surface handle Back itself (e.g. a settings sub-page going back to the list). */
+    private var onBack: (() -> Boolean)? = null
 
     val isShowing: Boolean get() = layer != null
 
     private val density = host.resources.displayMetrics.density
     private fun dp(v: Int) = (v * density).toInt()
 
-    fun show(content: View, style: Style, anchor: View? = null, animate: Boolean = true, onDismissed: (() -> Unit)? = null) {
+    fun show(
+        content: View,
+        style: Style,
+        anchor: View? = null,
+        animate: Boolean = true,
+        onBack: (() -> Boolean)? = null,
+        onDismissed: (() -> Unit)? = null
+    ) {
         removeNow()
         this.style = style
         this.onDismissed = onDismissed
+        this.onBack = onBack
         hingeTop = true
         val inset = insets()
 
@@ -54,12 +64,15 @@ class MetroOverlay(private val host: FrameLayout, private val insets: () -> Rect
         val params = when (style) {
             Style.SHEET -> FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
                 topMargin = inset.top + dp(72)
+                leftMargin = dp(8)
+                rightMargin = dp(8)
+                bottomMargin = dp(8)
             }
             Style.PANEL -> FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             Style.DIALOG -> FrameLayout.LayoutParams(minOf(host.width - dp(32), dp(380)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                 topMargin = inset.top + dp(64)
             }
-            Style.POPUP -> FrameLayout.LayoutParams(minOf(host.width - dp(24), dp(300)), ViewGroup.LayoutParams.WRAP_CONTENT)
+            Style.POPUP -> FrameLayout.LayoutParams(minOf(host.width - dp(24), dp(320)), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         when (style) {
             Style.SHEET -> content.setPadding(content.paddingLeft, content.paddingTop, content.paddingRight, content.paddingBottom + inset.bottom)
@@ -123,12 +136,20 @@ class MetroOverlay(private val host: FrameLayout, private val insets: () -> Rect
         }
     }
 
+    /** Back pressed: the surface's own back step if it has one, otherwise dismiss. */
+    fun handleBack(): Boolean {
+        if (layer == null) return false
+        if (onBack?.invoke() == true) return true
+        return dismiss()
+    }
+
     /** Animates the current surface out. Returns false when nothing was showing. */
     fun dismiss(): Boolean {
         val scrim = layer ?: return false
         val content = card ?: return false
         layer = null
         card = null
+        onBack = null
         val callback = onDismissed
         onDismissed = null
         val finish: () -> Unit = {
@@ -154,5 +175,6 @@ class MetroOverlay(private val host: FrameLayout, private val insets: () -> Rect
         layer = null
         card = null
         onDismissed = null
+        onBack = null
     }
 }

@@ -56,8 +56,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnLayout
 import androidx.lifecycle.Lifecycle
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -222,6 +224,7 @@ class LauncherActivity : AppCompatActivity() {
                 removeTilesFor(pkg)
             }
             icons.clear()
+            installTimes.clear()
             appHelper.reload()
             allApps = appHelper.getAllApps()
             refreshDrawer()
@@ -309,7 +312,7 @@ class LauncherActivity : AppCompatActivity() {
             prefs.backgroundMode = "picture"
             loadBackdrop()
             applyLookAndFeel()
-            if (metroOverlay.isShowing) settingsPage.show(animate = false)
+            if (metroOverlay.isShowing) settingsPage.show("background", animate = false)
         }
     }
 
@@ -324,7 +327,7 @@ class LauncherActivity : AppCompatActivity() {
 
     private val calendarPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) refreshAgenda() else toast("Calendar events stay hidden")
-        if (metroOverlay.isShowing) settingsPage.show(animate = false)
+        if (metroOverlay.isShowing) settingsPage.show("privacy", animate = false)
     }
 
     private val backupWriter = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -386,6 +389,7 @@ class LauncherActivity : AppCompatActivity() {
         setupChrome()
         loadBackdrop()
         applyLookAndFeel()
+        applySystemBars()
         if (prefs.iconPack.isNotEmpty()) icons.setIconPack(prefs.iconPack) { onIconsChanged() }
         icons.prefetch(allPinnedPackages() + allApps.map { it.packageName })
 
@@ -526,6 +530,11 @@ class LauncherActivity : AppCompatActivity() {
             onDrawerPageReady = { page -> setupDrawerPage(page) }
         )
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
+            override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
+                wallpaperX = (position + positionOffset).coerceIn(0f, 1f)
+                updateWallpaperOffsets()
+            }
+
             override fun onPageSelected(position: Int) {
                 val onTiles = position == LauncherPagerAdapter.PAGE_TILES
                 swapTitle(if (onTiles) "start" else "all apps")
@@ -567,7 +576,11 @@ class LauncherActivity : AppCompatActivity() {
         // The suggestions strip scrolls away with the first rows of tiles.
         rv.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                suggestionsStrip?.translationY = -recyclerView.computeVerticalScrollOffset().toFloat()
+                val offset = recyclerView.computeVerticalScrollOffset()
+                suggestionsStrip?.translationY = -offset.toFloat()
+                val range = (recyclerView.computeVerticalScrollRange() - recyclerView.computeVerticalScrollExtent()).coerceAtLeast(1)
+                wallpaperY = 0.5f + 0.5f * (offset.toFloat() / range).coerceIn(0f, 1f)
+                updateWallpaperOffsets()
             }
         })
         rv.post { refreshSuggestions() }
@@ -686,9 +699,9 @@ class LauncherActivity : AppCompatActivity() {
         val rv = page.findViewById<RecyclerView>(R.id.rv_app_drawer)
         if (rvDrawer === rv) return
         rvDrawer = rv
-        rv.layoutManager = LinearLayoutManager(this)
         rv.adapter = drawerAdapter
         rv.setPadding(0, 0, 0, systemInsets.bottom + ui.dp(24))
+        applyDrawerLayout(rv)
 
         val search = page.findViewById<EditText>(R.id.et_drawer_search)
         val clear = page.findViewById<View>(R.id.btn_drawer_search_clear)
@@ -706,10 +719,52 @@ class LauncherActivity : AppCompatActivity() {
         refreshDrawer()
     }
 
+    private fun applyDrawerLayout(rv: RecyclerView) {
+        val grid = prefs.drawerStyle == "grid"
+        drawerAdapter.grid = grid
+        rv.layoutManager = if (grid) {
+            GridLayoutManager(this, 4).apply {
+                spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                    override fun getSpanSize(position: Int): Int = if (drawerAdapter.isFullSpan(position)) 4 else 1
+                }
+            }
+        } else {
+            LinearLayoutManager(this)
+        }
+    }
+
+    private val installTimes = HashMap<String, Long>()
+
+    private fun installTime(packageName: String): Long = installTimes.getOrPut(packageName) {
+        try {
+            packageManager.getPackageInfo(packageName, 0).firstInstallTime
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
     private fun refreshDrawer() {
         if (drawerQuery.isEmpty()) {
             val hiddenCount = prefs.hiddenApps.count { pkg -> allApps.any { it.packageName == pkg } }
-            drawerAdapter.submit(visibleApps(), grouped = true, mostUsed = mostUsedApps(4), privateCount = hiddenCount)
+            val apps = visibleApps()
+            val recent = if (prefs.showRecentlyAdded) {
+                val since = System.currentTimeMillis() - 3 * 86_400_000L
+                apps.filter { installTime(it.packageName) > since }.sortedByDescending { installTime(it.packageName) }.take(3)
+            } else emptyList()
+            when (prefs.drawerSort) {
+                "used" -> {
+                    val usage = prefs.usageCounts()
+                    drawerAdapter.submit(
+                        apps.sortedWith(compareByDescending<AppLauncherHelper.AppEntry> { usage[it.packageName] ?: 0 }.thenBy { it.name.lowercase() }),
+                        grouped = true, privateCount = hiddenCount, recentlyAdded = recent, letterGroups = false, listLabel = "By use"
+                    )
+                }
+                "recent" -> drawerAdapter.submit(
+                    apps.sortedByDescending { installTime(it.packageName) },
+                    grouped = true, privateCount = hiddenCount, letterGroups = false, listLabel = "Newest first"
+                )
+                else -> drawerAdapter.submit(apps, grouped = true, mostUsed = mostUsedApps(4), privateCount = hiddenCount, recentlyAdded = recent)
+            }
         } else {
             drawerAdapter.submit(rankApps(drawerQuery), grouped = false)
         }
@@ -750,6 +805,13 @@ class LauncherActivity : AppCompatActivity() {
         override fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View) = showFolderAppMenu(folder, app, anchor)
 
         override fun onTileSwipe(tile: TileItem) = showTileNotifications(tile)
+
+        override fun canCustomise(): Boolean = !prefs.layoutLocked
+
+        override fun onLockedLongPress(tile: TileItem) {
+            root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            showLockedTileMenu(tile)
+        }
     }
 
     private val dragCallback = object : ItemTouchHelper.Callback() {
@@ -1581,20 +1643,50 @@ class LauncherActivity : AppCompatActivity() {
         elevation = card.elevation
         card.background = null
         card.elevation = 0f
+        clipToOutline = true
         addView(card)
+    }
+
+    /** While Start is locked, long-press offers only safe actions plus a way to unlock. */
+    private fun showLockedTileMenu(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header(tile.title.ifEmpty { "Tile" }, "Start is locked"))
+        if (tile.type == TileType.APP_SHORTCUT && tile.shortcutId == null) tile.packageName?.let { addShortcutRows(card, it) }
+        val unread = (if (tile.type == TileType.FOLDER) tile.children.mapNotNull { it.packageName } else listOfNotNull(tile.packageName))
+            .sumOf { NotificationHub.get(it)?.count ?: 0 }
+        if (unread > 0) card.addView(ui.action(R.drawable.ic_m_notifications, "Notifications ($unread)") {
+            metroOverlay.dismiss()
+            showTileNotifications(tile)
+        })
+        card.addView(ui.action(R.drawable.ic_m_lock, "Unlock Start", "Allow moving, resizing and unpinning") {
+            prefs.layoutLocked = false
+            metroOverlay.dismiss()
+            toast("Start unlocked")
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
     }
 
     /** "…" menu on the header, and long-press on empty Start space. */
     private fun showStartMenu(anchor: View?) {
         val card = ui.card()
-        card.addView(ui.action(R.drawable.ic_m_add, "Add tiles") { showAddTileSheet() })
-        card.addView(ui.action(R.drawable.ic_m_widgets, "Add a widget") { showWidgetPicker() })
-        card.addView(ui.action(R.drawable.ic_m_resize, "Customise Start", "Move, resize, recolour, make folders") {
-            metroOverlay.dismiss()
-            if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
-            tileAdapter.enterEditMode(tiles.firstOrNull()?.id)
-        })
-        card.addView(ui.action(R.drawable.ic_m_palette, "Accent colour") { settingsPage.show(scrollToColors = true) })
+        if (!prefs.layoutLocked) {
+            card.addView(ui.action(R.drawable.ic_m_add, "Add tiles") { showAddTileSheet() })
+            card.addView(ui.action(R.drawable.ic_m_widgets, "Add a widget") { showWidgetPicker() })
+        }
+        if (prefs.layoutLocked) {
+            card.addView(ui.action(R.drawable.ic_m_lock, "Unlock Start", "Start is locked against changes") {
+                prefs.layoutLocked = false
+                metroOverlay.dismiss()
+                toast("Start unlocked")
+            })
+        } else {
+            card.addView(ui.action(R.drawable.ic_m_resize, "Customise Start", "Move, resize, recolour, make folders") {
+                metroOverlay.dismiss()
+                if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+                tileAdapter.enterEditMode(tiles.firstOrNull()?.id)
+            })
+        }
+        card.addView(ui.action(R.drawable.ic_m_palette, "Accent colour") { settingsPage.show("colours") })
         card.addView(ui.action(R.drawable.ic_m_settings, "Settings") { settingsPage.show() })
         metroOverlay.show(card, if (anchor != null) MetroOverlay.Style.POPUP else MetroOverlay.Style.SHEET, anchor)
     }
@@ -1630,7 +1722,7 @@ class LauncherActivity : AppCompatActivity() {
         card.addView(ui.header(tile.title.ifEmpty { "Tile" }, describe(tile)))
         if (!isHeader) {
             card.addView(ui.sectionTitle("Size"))
-            val sizes = TileSize.entries
+            val sizes = tileAdapter.allowedSizes(tile)
             card.addView(ui.chips(sizes.map { it.label }, sizes.indexOf(tile.size)) { i ->
                 if (tile.size != sizes[i]) {
                     tile.size = sizes[i]
@@ -1897,7 +1989,7 @@ class LauncherActivity : AppCompatActivity() {
                 info.provider.packageName
             }
             val size = widgetTileSize(info)
-            card.addView(ui.actionWithIcon(widgets.icon(this, info) ?: icons.icon(info.provider.packageName), widgets.label(info), "$app · ${size.label}") {
+            card.addView(ui.actionWithIcon(widgets.preview(this, info) ?: widgets.icon(this, info) ?: icons.icon(info.provider.packageName), widgets.label(info), "$app · ${size.label}") {
                 metroOverlay.dismiss()
                 addWidget(info, size)
             })
@@ -1905,17 +1997,8 @@ class LauncherActivity : AppCompatActivity() {
         metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
     }
 
-    /** The smallest tile that fits the widget's minimum size. */
-    private fun widgetTileSize(info: AppWidgetProviderInfo): TileSize {
-        val pitch = gridLayoutManager.cellPitch.takeIf { it > 0f } ?: (resources.displayMetrics.widthPixels / prefs.columns.toFloat())
-        val cols = ceil(info.minWidth / pitch).toInt()
-        val rows = ceil(info.minHeight / pitch).toInt()
-        return when {
-            rows > 2 -> TileSize.LARGE
-            cols > 2 -> TileSize.WIDE
-            else -> TileSize.MEDIUM
-        }
-    }
+    private fun widgetTileSize(info: AppWidgetProviderInfo): TileSize =
+        widgets.defaultSize(info, gridLayoutManager.cellPitch.takeIf { it > 0f } ?: (resources.displayMetrics.widthPixels / prefs.columns.toFloat()))
 
     private fun addWidget(info: AppWidgetProviderInfo, size: TileSize) {
         val pending = PendingWidget(widgets.allocate(), widgets.label(info), size)
@@ -2020,6 +2103,11 @@ class LauncherActivity : AppCompatActivity() {
         override fun showWeatherSetup() = this@LauncherActivity.showWeatherSetup()
         override fun applyWallpaperAccent() = this@LauncherActivity.applyWallpaperAccent()
         override fun showPrivateApps() = unlockPrivateApps()
+        override fun applyDrawerSettings() {
+            rvDrawer?.let { applyDrawerLayout(it) }
+            refreshDrawer()
+        }
+        override fun applySystemBars() = this@LauncherActivity.applySystemBars()
         override val privateAppCount: Int get() = prefs.hiddenApps.size
         override fun setWeatherUnit(unit: String) {
             prefs.weatherUnit = unit
@@ -2183,6 +2271,28 @@ class LauncherActivity : AppCompatActivity() {
 
     // ── Look & feel ─────────────────────────────────────────────────────────────────────
 
+    private fun applySystemBars() {
+        val controller = WindowInsetsControllerCompat(window, root)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (prefs.hideStatusBar) controller.hide(WindowInsetsCompat.Type.statusBars())
+        else controller.show(WindowInsetsCompat.Type.statusBars())
+    }
+
+    private var wallpaperX = 0f
+    private var wallpaperY = 0.5f
+
+    /** Wallpaper parallax: x follows Start → All apps, y follows how far Start is scrolled. */
+    private fun updateWallpaperOffsets() {
+        if (!prefs.wallpaperParallax || prefs.backgroundMode == "picture") return
+        val token = root.windowToken ?: return
+        try {
+            val wm = WallpaperManager.getInstance(this)
+            wm.setWallpaperOffsetSteps(1f, 0f)
+            wm.setWallpaperOffsets(token, wallpaperX, wallpaperY)
+        } catch (_: Exception) {
+        }
+    }
+
     @SuppressLint("NotifyDataSetChanged")
     private fun applyLookAndFeel() {
         val pictureMode = prefs.backgroundMode == "picture" && backdrop != null
@@ -2274,7 +2384,7 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun goBack(homePressed: Boolean) {
         when {
-            metroOverlay.dismiss() -> Unit
+            metroOverlay.handleBack() -> Unit
             searchPanel.visibility == View.VISIBLE -> closeSearch()
             tileAdapter.editMode -> tileAdapter.exitEditMode()
             closeOpenFolder() -> Unit

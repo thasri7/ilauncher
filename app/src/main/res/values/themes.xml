@@ -59,4 +59,16 @@
         <item name="android:textSize">14sp</item>
         <item name="android:fontFamily">sans-serif-medium</item>
     </style>
+
+    <!-- Keyboard toolbar icon: borderless round ripple, quiet tint. -->
+    <style name="KbToolbarIcon">
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_marginEnd">2dp</item>
+        <item name="android:padding">10dp</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="android:background">?android:attr/selectableItemBackgroundBorderless</item>
+        <!-- Native tint: the keyboard is an input method, not an AppCompat activity. -->
+        <item name="android:tint">@color/kb_text_secondary</item>
+    </style>
 </resources>

@@ -2,6 +2,7 @@ package com.custom.keyboard
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
 import org.json.JSONObject
 
 class KeyboardPreferences(context: Context) {
@@ -60,28 +61,71 @@ class KeyboardPreferences(context: Context) {
         get() = prefs.getString(KEY_THEME, "slate") ?: "slate" // "slate", "amoled", "neon"
         set(value) = prefs.edit().putString(KEY_THEME, value).apply()
 
+    /**
+     * Text shortcuts ("/omw" → "On my way!"). A few generic ones are seeded once; after that the
+     * stored list is the only source, so deleting a shortcut sticks.
+     */
     fun getAllShortcuts(): MutableMap<String, String> {
         val jsonStr = prefs.getString(KEY_SHORTCUTS_JSON, null)
-        val map = mutableMapOf(
-            "/email" to "my.email@gmail.com",
-            "/phone" to "+1 555-0199",
-            "/addr" to "123 Main Street, Suite 100",
-            "/omw" to "On my way!",
-            "/brb" to "Be right back!",
-            "/thx" to "Thank you so much!"
-        )
-        if (!jsonStr.isNullOrEmpty()) {
-            try {
-                val json = JSONObject(jsonStr)
-                val keys = json.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    map[k] = json.getString(k)
-                }
-            } catch (_: Exception) {}
-        }
+            ?: JSONObject(mapOf("/omw" to "On my way!", "/brb" to "Be right back!", "/thx" to "Thank you so much!"))
+                .toString().also { prefs.edit().putString(KEY_SHORTCUTS_JSON, it).apply() }
+        val map = mutableMapOf<String, String>()
+        try {
+            val json = JSONObject(jsonStr)
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                map[k] = json.getString(k)
+            }
+        } catch (_: Exception) {}
         return map
     }
+
+    // ── Quick replies, recent emoji, clipboard history (all stored on the device only) ─────
+
+    private fun getList(key: String): MutableList<String> = try {
+        val arr = JSONArray(prefs.getString(key, "[]"))
+        MutableList(arr.length()) { arr.getString(it) }
+    } catch (_: Exception) {
+        mutableListOf()
+    }
+
+    private fun putList(key: String, list: List<String>) {
+        prefs.edit().putString(key, JSONArray(list).toString()).apply()
+    }
+
+    /** The user's quick replies; seeded once with a few everyday ones they can delete. */
+    var quickReplies: List<String>
+        get() {
+            if (!prefs.contains(KEY_QUICK_REPLIES)) {
+                putList(KEY_QUICK_REPLIES, listOf("On my way!", "Running 5 minutes late.", "Can I call you back?", "Thank you!"))
+            }
+            return getList(KEY_QUICK_REPLIES)
+        }
+        set(value) = putList(KEY_QUICK_REPLIES, value.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(30))
+
+    /** Most recently used emoji first. */
+    val recentEmojis: List<String> get() = getList(KEY_RECENT_EMOJI)
+
+    fun recordEmoji(emoji: String) {
+        putList(KEY_RECENT_EMOJI, (listOf(emoji) + getList(KEY_RECENT_EMOJI).filter { it != emoji }).take(16))
+    }
+
+    /** Clipboard history, newest first. */
+    val clipHistory: List<String> get() = getList(KEY_CLIP_HISTORY)
+
+    fun recordClip(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty() || clean.length > 2000) return
+        putList(KEY_CLIP_HISTORY, (listOf(clean) + getList(KEY_CLIP_HISTORY).filter { it != clean }).take(20))
+    }
+
+    fun clearClipHistory() = putList(KEY_CLIP_HISTORY, emptyList())
+
+    /** Last language picked in the translate panel (BCP-47 code). */
+    var translateTarget: String
+        get() = prefs.getString(KEY_TRANSLATE_TARGET, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_TRANSLATE_TARGET, value).apply()
 
     fun saveShortcut(trigger: String, expansion: String) {
         val current = getAllShortcuts()
@@ -112,5 +156,9 @@ class KeyboardPreferences(context: Context) {
         private const val KEY_KEY_POPUPS = "key_popups_enabled"
         private const val KEY_THEME = "keyboard_theme"
         private const val KEY_SHORTCUTS_JSON = "custom_shortcuts_json"
+        private const val KEY_QUICK_REPLIES = "quick_replies_json"
+        private const val KEY_RECENT_EMOJI = "recent_emoji_json"
+        private const val KEY_CLIP_HISTORY = "clip_history_json"
+        private const val KEY_TRANSLATE_TARGET = "translate_target"
     }
 }

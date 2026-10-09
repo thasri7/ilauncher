@@ -42,6 +42,7 @@ class AppDrawerAdapter(
         private const val TYPE_LABEL = 1
         private const val TYPE_APP = 2
         private const val TYPE_PRIVATE = 3
+        private const val TYPE_APP_GRID = 4
         const val OTHER_LETTER = '#'
 
         fun letterOf(name: String): Char {
@@ -51,6 +52,19 @@ class AppDrawerAdapter(
     }
 
     private var rows: List<Row> = emptyList()
+
+    /** Grid layout for All apps (icons in columns) instead of the W10M list. */
+    var grid = false
+        @SuppressLint("NotifyDataSetChanged")
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyDataSetChanged()
+            }
+        }
+
+    /** Headers, labels and the private row span the whole grid. */
+    fun isFullSpan(position: Int): Boolean = rows.getOrNull(position) !is Row.App
     /** Bumped when icons change (icon pack switch) so every row reloads its icon. */
     private var iconGeneration = 0
 
@@ -59,18 +73,37 @@ class AppDrawerAdapter(
         private set
 
     @SuppressLint("NotifyDataSetChanged")
+    /**
+     * @param grouped All apps (sections) rather than a flat result list
+     * @param letterGroups A–Z letter headers; otherwise [apps] keep their order under [listLabel]
+     */
     fun submit(
         apps: List<AppLauncherHelper.AppEntry>,
         grouped: Boolean,
         mostUsed: List<AppLauncherHelper.AppEntry> = emptyList(),
-        privateCount: Int = 0
+        privateCount: Int = 0,
+        recentlyAdded: List<AppLauncherHelper.AppEntry> = emptyList(),
+        letterGroups: Boolean = true,
+        listLabel: String? = null
     ) {
         val out = ArrayList<Row>(apps.size + 32)
         if (grouped && privateCount > 0) out.add(Row.Private(privateCount))
         if (!grouped) {
             apps.mapTo(out) { Row.App(it) }
             lettersPresent = emptySet()
+        } else if (!letterGroups) {
+            if (recentlyAdded.isNotEmpty()) {
+                out.add(Row.Label("Recently added"))
+                recentlyAdded.mapTo(out) { Row.App(it) }
+            }
+            listLabel?.let { out.add(Row.Label(it)) }
+            apps.mapTo(out) { Row.App(it) }
+            lettersPresent = emptySet()
         } else {
+            if (recentlyAdded.isNotEmpty()) {
+                out.add(Row.Label("Recently added"))
+                recentlyAdded.mapTo(out) { Row.App(it) }
+            }
             if (mostUsed.isNotEmpty()) {
                 out.add(Row.Label("Most used"))
                 mostUsed.mapTo(out) { Row.App(it) }
@@ -101,7 +134,7 @@ class AppDrawerAdapter(
     override fun getItemViewType(position: Int): Int = when (rows[position]) {
         is Row.Header -> TYPE_HEADER
         is Row.Label -> TYPE_LABEL
-        is Row.App -> TYPE_APP
+        is Row.App -> if (grid) TYPE_APP_GRID else TYPE_APP
         is Row.Private -> TYPE_PRIVATE
     }
 
@@ -111,6 +144,7 @@ class AppDrawerAdapter(
             TYPE_HEADER -> HeaderHolder(inflater.inflate(R.layout.item_app_header, parent, false))
             TYPE_LABEL -> LabelHolder(inflater.inflate(R.layout.item_drawer_label, parent, false))
             TYPE_PRIVATE -> PrivateHolder(inflater.inflate(R.layout.item_app_drawer, parent, false))
+            TYPE_APP_GRID -> AppHolder(inflater.inflate(R.layout.item_app_grid, parent, false))
             else -> AppHolder(inflater.inflate(R.layout.item_app_drawer, parent, false))
         }
     }
@@ -174,7 +208,7 @@ class AppDrawerAdapter(
                 icons.iconAsync(app.packageName, themed = false) { d, _ -> if (boundKey == key) icon.setImageDrawable(d) }
             }
             pin.visibility = if (isPinned(app.packageName)) View.VISIBLE else View.GONE
-            pin.imageTintList = ColorStateList.valueOf(accent())
+            pin.imageTintList = ColorStateList.valueOf(0x99FFFFFF.toInt())
             itemView.setOnTouchListener { v, e ->
                 if (tiltEnabled()) when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> MetroMotion.tiltTo(v, e.x, e.y)

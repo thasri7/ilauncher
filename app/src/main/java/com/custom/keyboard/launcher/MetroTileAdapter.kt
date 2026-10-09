@@ -76,6 +76,9 @@ class MetroTileAdapter(
         fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View)
         /** Horizontal swipe across a tile that has notifications. */
         fun onTileSwipe(tile: TileItem)
+        /** False while Start is locked against edits. */
+        fun canCustomise(): Boolean
+        fun onLockedLongPress(tile: TileItem)
     }
 
     companion object {
@@ -423,7 +426,10 @@ class MetroTileAdapter(
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             clipChildren = false
         }
-        val frame = FrameLayout(parent.context).apply { clipChildren = false }
+        // The frame must keep clipChildren on: Android only clips a view's content (here the tile
+        // surface with its sliding live faces) when the view's parent clips children. The frame
+        // itself may still overflow the root, which lets the edit buttons sit on the corners.
+        val frame = FrameLayout(parent.context)
         root.addView(frame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         val surface = LayoutInflater.from(parent.context).inflate(layout, frame, false) as FrameLayout
         frame.addView(surface, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -533,7 +539,7 @@ class MetroTileAdapter(
     private fun styleSurface(holder: TileHolder, tile: TileItem) {
         val radius = prefs.cornerRadiusDp * density
         holder.surface.background = when {
-            tile.type == TileType.SECTION_HEADER || tile.type == TileType.WIDGET -> null
+            tile.type == TileType.SECTION_HEADER -> null
             holder is FolderPanelHolder -> GradientDrawable().apply {
                 setColor(withAlpha(darker(colorFor(tile), 0.55f), prefs.tileOpacity.coerceIn(40, 100)))
                 cornerRadius = radius
@@ -578,7 +584,7 @@ class MetroTileAdapter(
         }
         val isHeader = tile.type == TileType.SECTION_HEADER
         h.btnUnpin.show(selected)
-        h.btnResize.show(selected && !isHeader)
+        h.btnResize.show(selected && allowedSizes(tile).size > 1)
         h.btnMore.show(selected)
         val button = ((if (tile.size == TileSize.SMALL && !isHeader) 22 else 30) * density).toInt()
         listOf(h.btnUnpin, h.btnResize, h.btnMore).forEach { b ->
@@ -653,22 +659,82 @@ class MetroTileAdapter(
         root.onLongPress = {
             holder.tile?.let { tile ->
                 MetroMotion.releaseTilt(frame)
+                if (!callbacks.canCustomise()) {
+                    callbacks.onLockedLongPress(tile)
+                    return@let
+                }
                 if (editMode) select(tile.id) else enterEditMode(tile.id)
                 // The finger is still down, so the same gesture can carry straight on into a drag.
                 callbacks.onStartDrag(holder)
             }
         }
         holder.btnUnpin.setOnClickListener { holder.tile?.let { callbacks.onTileUnpinned(it) } }
-        holder.btnResize.setOnClickListener {
-            holder.tile?.let {
-                it.size = it.size.nextInCycle()
-                // The user chose this size; auto-grow leaves it alone from now on.
-                it.sizeLocked = true
-                holder.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                callbacks.onTileResized(it)
+        // Resize handle: a tap steps through the sizes (W10M); dragging it snaps the tile to the
+        // size under your finger, like resizing a widget on a modern home screen.
+        var startX = 0f
+        var startY = 0f
+        var resizing = false
+        val tileOrigin = IntArray(2)
+        holder.btnResize.setOnTouchListener { v, e ->
+            val tile = holder.tile ?: return@setOnTouchListener false
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = e.rawX
+                    startY = e.rawY
+                    resizing = false
+                    holder.root.getLocationOnScreen(tileOrigin)
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!resizing && hypot(e.rawX - startX, e.rawY - startY) > touchSlop) resizing = true
+                    if (resizing) {
+                        val pitch = cellPitch().takeIf { it > 0f } ?: return@setOnTouchListener true
+                        val cols = ceil((e.rawX - tileOrigin[0]) / pitch).toInt().coerceAtLeast(1)
+                        val rows = ceil((e.rawY - tileOrigin[1]) / pitch).toInt().coerceAtLeast(1)
+                        val wanted = snapSize(cols, rows, allowedSizes(tile))
+                        if (wanted != tile.size) {
+                            tile.size = wanted
+                            tile.sizeLocked = true
+                            v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            callbacks.onTileResized(tile)
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP -> if (!resizing) {
+                    val allowed = allowedSizes(tile)
+                    var next = tile.size.nextInCycle()
+                    repeat(4) { if (next !in allowed) next = next.nextInCycle() }
+                    if (next != tile.size) {
+                        tile.size = next
+                        // The user chose this size; auto-grow leaves it alone from now on.
+                        tile.sizeLocked = true
+                        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        callbacks.onTileResized(tile)
+                    }
+                }
             }
+            true
         }
         holder.btnMore.setOnClickListener { holder.tile?.let { callbacks.onTileMenu(it, root) } }
+    }
+
+    /** Sizes a tile may take: widgets are limited to what they support. */
+    fun allowedSizes(tile: TileItem): List<TileSize> = when (tile.type) {
+        TileType.SECTION_HEADER -> emptyList()
+        TileType.WIDGET -> widgets.allowedSizes(tile.appWidgetId, cellPitch())
+        else -> TileSize.entries
+    }
+
+    /** The allowed size closest to a footprint of [cols] × [rows] cells. */
+    private fun snapSize(cols: Int, rows: Int, allowed: List<TileSize>): TileSize {
+        val wanted = when {
+            cols <= 1 && rows <= 1 -> TileSize.SMALL
+            cols <= 2 && rows <= 2 -> TileSize.MEDIUM
+            rows <= 2 -> TileSize.WIDE
+            else -> TileSize.LARGE
+        }
+        if (wanted in allowed || allowed.isEmpty()) return wanted
+        return allowed.minBy { abs(it.cols - cols) + abs(it.rows - rows) }
     }
 
     private fun hasUnread(tile: TileItem) = when (tile.type) {
@@ -702,9 +768,9 @@ class MetroTileAdapter(
             elevation = 4 * density
             visibility = View.GONE
             val size = (30 * density).toInt()
-            // Half over the tile corner, like W10M, so they don't cover the tile's label.
+            // Inside the corners, so every tap on them lands on the tile (never on empty Start).
             parent.addView(this, FrameLayout.LayoutParams(size, size, gravity).apply {
-                val m = (-8 * density).toInt()
+                val m = (2 * density).toInt()
                 setMargins(m, m, m, m)
             })
         }
@@ -743,7 +809,8 @@ class MetroTileAdapter(
         var lastLiveAt = 0L
         val btnUnpin = editButton(frame, R.drawable.ic_m_unpin, Gravity.TOP or Gravity.END, "Unpin")
         val btnResize = editButton(frame, R.drawable.ic_m_resize, Gravity.BOTTOM or Gravity.END, "Resize")
-        val btnMore = editButton(frame, R.drawable.ic_m_more, Gravity.BOTTOM or Gravity.START, "More options")
+        // Top-left, so it never covers the label in the bottom-left corner.
+        val btnMore = editButton(frame, R.drawable.ic_m_more, Gravity.TOP or Gravity.START, "More options")
 
         /** Peek tiles slide their back face up; the rest flip like WP7 live tiles. */
         open val peeks = false

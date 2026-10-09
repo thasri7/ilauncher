@@ -8,7 +8,10 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Bundle
+import com.custom.keyboard.models.TileSize
+import kotlin.math.ceil
 
 /** Hosts ordinary Android home-screen widgets inside tiles. */
 class WidgetTiles(context: Context) {
@@ -31,7 +34,51 @@ class WidgetTiles(context: Context) {
         null
     }
 
+    /** The widget's own preview picture, when it ships one. */
+    fun preview(context: Context, info: AppWidgetProviderInfo): Drawable? = try {
+        info.loadPreviewImage(context, context.resources.displayMetrics.densityDpi)
+    } catch (_: Exception) {
+        null
+    }
+
     fun allocate(): Int = host.allocateAppWidgetId()
+
+    /** The tile size a widget should start at, from its recommended cells or its minimum size. */
+    fun defaultSize(info: AppWidgetProviderInfo, pitchPx: Float): TileSize {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.targetCellWidth > 0 && info.targetCellHeight > 0) {
+            // Target cells refer to a ~4-column home screen; our cell is half of a medium tile.
+            return when {
+                info.targetCellHeight >= 3 -> TileSize.LARGE
+                info.targetCellWidth >= 3 -> TileSize.WIDE
+                info.targetCellWidth <= 1 && info.targetCellHeight <= 1 -> TileSize.MEDIUM
+                else -> if (info.targetCellWidth >= 2 && info.targetCellHeight <= 1) TileSize.WIDE else TileSize.MEDIUM
+            }
+        }
+        if (pitchPx <= 0f) return TileSize.MEDIUM
+        val cols = ceil(info.minWidth / pitchPx).toInt()
+        val rows = ceil(info.minHeight / pitchPx).toInt()
+        return when {
+            rows > 2 -> TileSize.LARGE
+            cols > 2 -> TileSize.WIDE
+            else -> TileSize.MEDIUM
+        }
+    }
+
+    /** Sizes this widget can be shown at: big enough for its minimum, and only resizable directions. */
+    fun allowedSizes(id: Int, pitchPx: Float): List<TileSize> {
+        val info = manager.getAppWidgetInfo(id) ?: return TileSize.entries
+        if (pitchPx <= 0f) return TileSize.entries
+        val base = defaultSize(info, pitchPx)
+        val canW = info.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0
+        val canH = info.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0
+        val minW = if (canW && info.minResizeWidth > 0) info.minResizeWidth else info.minWidth
+        val minH = if (canH && info.minResizeHeight > 0) info.minResizeHeight else info.minHeight
+        return TileSize.entries.filter { s ->
+            val okW = s.cols * pitchPx >= minW * 0.85f && (canW || s.cols == base.cols)
+            val okH = s.rows * pitchPx >= minH * 0.85f && (canH || s.rows == base.rows)
+            okW && okH
+        }.ifEmpty { listOf(base) }
+    }
 
     fun delete(id: Int) {
         if (id < 0) return

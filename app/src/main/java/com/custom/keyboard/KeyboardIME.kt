@@ -2,6 +2,7 @@ package com.custom.keyboard
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -20,9 +21,11 @@ import android.speech.RecognizerIntent
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.SuperscriptSpan
+import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -33,9 +36,15 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,7 +76,6 @@ class KeyboardIME : InputMethodService() {
     private val translator = TranslatorEngine()
     private val mathCalc = MathCalculator()
     private val unitConverter = UnitConverter()
-    private val quickReplies = QuickReplyTemplates()
     private val fancyConverter = FancyFontConverter()
     private var activeFancyStyle: FancyFontConverter.Style? = null
 
@@ -94,7 +102,7 @@ class KeyboardIME : InputMethodService() {
 
     // Fold & Toolbar
     private lateinit var foldBar: LinearLayout
-    private lateinit var btnUnfold: TextView
+    private lateinit var btnUnfold: View
     private lateinit var topToolbarScroll: HorizontalScrollView
 
     // Unified Smart Suggestion & Action Strip
@@ -104,7 +112,6 @@ class KeyboardIME : InputMethodService() {
     private lateinit var smartIdleContainer: LinearLayout
     private lateinit var featureDrawerScroll: HorizontalScrollView
     private lateinit var featureDrawerContainer: LinearLayout
-    private val recentClips = mutableListOf<String>()
     private var activeDrawerType: String? = null
     private var floatMode = 0 // 0 = Full, 1 = Dock Right, 2 = Dock Left
 
@@ -283,27 +290,22 @@ class KeyboardIME : InputMethodService() {
     private fun captureInitialClipboard() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()
-        if (!clip.isNullOrEmpty() && !recentClips.contains(clip)) {
-            recentClips.add(0, clip)
-            if (recentClips.size > 8) {
-                recentClips.removeAt(recentClips.lastIndex)
-            }
-        }
+        if (!clip.isNullOrEmpty()) prefs.recordClip(clip)
     }
 
     private fun setupToolbar() {
-        val btnFold = rootView.findViewById<TextView>(R.id.action_fold)
-        val btnVoice = rootView.findViewById<TextView>(R.id.action_voice)
-        val btnClips = rootView.findViewById<TextView>(R.id.action_clips)
-        val btnQuick = rootView.findViewById<TextView>(R.id.action_quick)
-        val btnTranslate = rootView.findViewById<TextView>(R.id.action_translate)
-        val btnApps = rootView.findViewById<TextView>(R.id.action_apps)
-        val btnFancy = rootView.findViewById<TextView>(R.id.action_fancy)
-        val btnFocus = rootView.findViewById<TextView>(R.id.action_focus)
-        val btnOneHand = rootView.findViewById<TextView>(R.id.action_one_hand)
-        val btnSettings = rootView.findViewById<TextView>(R.id.action_settings)
-        val btnUndo = rootView.findViewById<TextView>(R.id.action_undo)
-        val btnSwitch = rootView.findViewById<TextView>(R.id.action_switch_ime)
+        val btnFold = rootView.findViewById<ImageView>(R.id.action_fold)
+        val btnVoice = rootView.findViewById<ImageView>(R.id.action_voice)
+        val btnClips = rootView.findViewById<ImageView>(R.id.action_clips)
+        val btnQuick = rootView.findViewById<ImageView>(R.id.action_quick)
+        val btnTranslate = rootView.findViewById<ImageView>(R.id.action_translate)
+        val btnApps = rootView.findViewById<ImageView>(R.id.action_apps)
+        val btnFancy = rootView.findViewById<ImageView>(R.id.action_fancy)
+        val btnFocus = rootView.findViewById<ImageView>(R.id.action_focus)
+        val btnOneHand = rootView.findViewById<ImageView>(R.id.action_one_hand)
+        val btnSettings = rootView.findViewById<ImageView>(R.id.action_settings)
+        val btnUndo = rootView.findViewById<ImageView>(R.id.action_undo)
+        val btnSwitch = rootView.findViewById<ImageView>(R.id.action_switch_ime)
 
         btnFold?.setOnClickListener {
             feedback(it)
@@ -325,7 +327,7 @@ class KeyboardIME : InputMethodService() {
                 }
                 startActivity(intent)
             } catch (_: Exception) {
-                currentInputConnection?.commitText("🎙️ ", 1)
+                Toast.makeText(this, "No voice typing app on this phone", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -357,13 +359,13 @@ class KeyboardIME : InputMethodService() {
         btnFocus?.setOnClickListener {
             feedback(it)
             currentMode = if (currentMode == KeyboardMode.CURSOR_DPAD) KeyboardMode.LETTERS else KeyboardMode.CURSOR_DPAD
-            btnFocus.text = if (currentMode == KeyboardMode.CURSOR_DPAD) "🔤" else "🎯"
+            btnFocus.setImageResource(if (currentMode == KeyboardMode.CURSOR_DPAD) R.drawable.ic_m_keyboard else R.drawable.ic_kb_cursor)
             renderKeyboard()
         }
 
         btnOneHand?.setOnClickListener {
             feedback(it)
-            toggleFloatMode(it as TextView)
+            toggleFloatMode(it as ImageView)
         }
 
         btnSettings?.setOnClickListener {
@@ -401,9 +403,11 @@ class KeyboardIME : InputMethodService() {
         }
     }
 
-    private fun toggleFloatMode(btn: TextView) {
+    private fun toggleFloatMode(btn: ImageView) {
         floatMode = (floatMode + 1) % 3
-        btn.text = "🪟"
+        // Mirror the glyph so it points at the side the keyboard is docked to.
+        btn.scaleX = if (floatMode == 2) -1f else 1f
+        btn.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(this, if (floatMode == 0) R.color.kb_text_secondary else R.color.kb_accent))
         val density = resources.displayMetrics.density
         val dockMargin = (68 * density).toInt()
         val params = keyboardRoot.layoutParams as FrameLayout.LayoutParams
@@ -433,6 +437,61 @@ class KeyboardIME : InputMethodService() {
         rootView.setBackgroundColor(rootBg)
     }
 
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** One suggestion-strip chip; [accent] highlights actions such as Paste. */
+    private fun chip(
+        label: CharSequence,
+        accent: Boolean = false,
+        icon: Int? = null,
+        onLongClick: (() -> Unit)? = null,
+        onClick: () -> Unit
+    ): TextView = TextView(this).apply {
+        text = label
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        maxWidth = dp(220)
+        gravity = Gravity.CENTER_VERTICAL
+        setTextColor(ContextCompat.getColor(this@KeyboardIME, if (accent) R.color.kb_accent else R.color.kb_text_primary))
+        background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
+        textSize = 13f
+        setPadding(dp(12), 0, dp(12), 0)
+        if (icon != null) {
+            val d = ContextCompat.getDrawable(this@KeyboardIME, icon)?.mutate()
+            d?.setTint(currentTextColor)
+            d?.setBounds(0, 0, dp(16), dp(16))
+            setCompoundDrawablesRelative(d, null, null, null)
+            compoundDrawablePadding = dp(6)
+        }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)).apply { setMargins(0, 0, dp(6), 0) }
+        setOnClickListener {
+            feedback(it)
+            onClick()
+        }
+        if (onLongClick != null) setOnLongClickListener {
+            feedback(it)
+            onLongClick()
+            true
+        }
+    }
+
+    private fun drawerNote(text: String) = TextView(this).apply {
+        this.text = text
+        setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_secondary))
+        textSize = 12f
+        setPadding(dp(6), 0, dp(10), 0)
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30))
+    }
+
+    /** Text the translate / save actions work on: the selection, or everything before the cursor. */
+    private fun currentFieldText(): Pair<String, Boolean> {
+        val ic = currentInputConnection ?: return "" to false
+        val selected = ic.getSelectedText(0)?.toString().orEmpty()
+        if (selected.isNotBlank()) return selected to true
+        return ic.getTextBeforeCursor(1000, 0)?.toString().orEmpty() to false
+    }
+
     private fun showFeatureDrawer(type: String) {
         if (activeDrawerType == type && featureDrawerScroll.visibility == View.VISIBLE) {
             closeFeatureDrawer()
@@ -443,160 +502,64 @@ class KeyboardIME : InputMethodService() {
         smartIdleScroll.visibility = View.GONE
         suggestionTypingBar.visibility = View.GONE
         featureDrawerContainer.removeAllViews()
-
-        // ✕ Close chip
-        val closeBtn = TextView(this).apply {
-            text = "✕ Close"
-            setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_accent))
-            background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-            textSize = 12f
-            setPadding(14, 6, 14, 6)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 8, 0) }
-            setOnClickListener {
-                feedback(it)
-                closeFeatureDrawer()
-            }
-        }
-        featureDrawerContainer.addView(closeBtn)
+        featureDrawerScroll.scrollTo(0, 0)
+        featureDrawerContainer.addView(chip("Close", accent = true, icon = R.drawable.ic_m_close) { closeFeatureDrawer() })
 
         when (type) {
             "quick" -> {
-                for (template in quickReplies.templates) {
-                    val chip = TextView(this).apply {
-                        text = "💬 $template"
-                        setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                        background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                        textSize = 12f
-                        setPadding(14, 6, 14, 6)
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { setMargins(0, 0, 8, 0) }
-                        setOnClickListener {
-                            feedback(it)
-                            currentInputConnection?.commitText("$template ", 1)
-                            closeFeatureDrawer()
-                        }
+                featureDrawerContainer.addView(chip("Save typed text", accent = true, icon = R.drawable.ic_m_add) {
+                    val text = currentFieldText().first.trim()
+                    if (text.isEmpty()) {
+                        Toast.makeText(this, "Type a message first, then save it", Toast.LENGTH_SHORT).show()
+                    } else {
+                        prefs.quickReplies = listOf(text.take(300)) + prefs.quickReplies
+                        activeDrawerType = null
+                        showFeatureDrawer("quick")
                     }
-                    featureDrawerContainer.addView(chip)
+                })
+                val replies = prefs.quickReplies
+                if (replies.isEmpty()) featureDrawerContainer.addView(drawerNote("No quick replies yet"))
+                for (reply in replies) {
+                    featureDrawerContainer.addView(chip(reply, onLongClick = {
+                        prefs.quickReplies = prefs.quickReplies - reply
+                        Toast.makeText(this, "Quick reply deleted", Toast.LENGTH_SHORT).show()
+                        activeDrawerType = null
+                        showFeatureDrawer("quick")
+                    }) {
+                        currentInputConnection?.commitText("$reply ", 1)
+                        closeFeatureDrawer()
+                    })
                 }
+                if (replies.isNotEmpty()) featureDrawerContainer.addView(drawerNote("Long-press to delete"))
             }
             "clips" -> {
                 captureInitialClipboard()
-                if (recentClips.isNotEmpty()) {
-                    val clearBtn = TextView(this).apply {
-                        text = "🗑 Clear"
-                        setTextColor(Color.parseColor("#EF4444"))
-                        background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                        textSize = 12f
-                        setPadding(12, 6, 12, 6)
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { setMargins(0, 0, 8, 0) }
-                        setOnClickListener {
-                            feedback(it)
-                            recentClips.clear()
-                            showFeatureDrawer("clips")
-                        }
-                    }
-                    featureDrawerContainer.addView(clearBtn)
-
-                    for (clip in recentClips) {
-                        val chip = TextView(this).apply {
-                            text = if (clip.length > 25) clip.take(22) + "..." else clip
-                            setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                            background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                            textSize = 12f
-                            setPadding(14, 6, 14, 6)
-                            layoutParams = LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { setMargins(0, 0, 8, 0) }
-                            setOnClickListener {
-                                feedback(it)
-                                currentInputConnection?.commitText(clip, 1)
-                                closeFeatureDrawer()
-                            }
-                        }
-                        featureDrawerContainer.addView(chip)
-                    }
+                val clips = prefs.clipHistory
+                if (clips.isEmpty()) {
+                    featureDrawerContainer.addView(drawerNote("Copied text shows up here"))
                 } else {
-                    val emptyTv = TextView(this).apply {
-                        text = "No clipboard history"
-                        setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_secondary))
-                        textSize = 12f
-                        setPadding(12, 6, 12, 6)
-                    }
-                    featureDrawerContainer.addView(emptyTv)
-                }
-            }
-            "translate" -> {
-                val phrases = listOf(
-                    "Salam (Peace)" to "Salam",
-                    "Marhaban (Hello)" to "Marhaban",
-                    "Shukran (Thanks)" to "Shukran",
-                    "Afwan (Welcome)" to "Afwan",
-                    "Bonjour (Hello)" to "Bonjour",
-                    "Merci (Thanks)" to "Merci",
-                    "De rien (Welcome)" to "De rien",
-                    "Hola (Hello)" to "Hola",
-                    "Gracias (Thanks)" to "Gracias",
-                    "De nada (Welcome)" to "De nada"
-                )
-                for ((label, phrase) in phrases) {
-                    val chip = TextView(this).apply {
-                        text = "🌐 $label"
-                        setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                        background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                        textSize = 12f
-                        setPadding(14, 6, 14, 6)
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { setMargins(0, 0, 8, 0) }
-                        setOnClickListener {
-                            feedback(it)
-                            currentInputConnection?.commitText("$phrase ", 1)
+                    featureDrawerContainer.addView(chip("Clear", icon = R.drawable.ic_m_delete) {
+                        prefs.clearClipHistory()
+                        activeDrawerType = null
+                        showFeatureDrawer("clips")
+                    })
+                    for (clip in clips) {
+                        featureDrawerContainer.addView(chip(clip.replace('\n', ' ')) {
+                            currentInputConnection?.commitText(clip, 1)
                             closeFeatureDrawer()
-                        }
+                        })
                     }
-                    featureDrawerContainer.addView(chip)
                 }
             }
+            "translate" -> showTranslateDrawer()
             "apps" -> {
                 val allApps = appLauncher.getAllApps()
-                if (allApps.isNotEmpty()) {
-                    for (app in allApps) {
-                        val chip = TextView(this).apply {
-                            text = "🚀 ${app.name}"
-                            setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                            background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                            textSize = 12f
-                            setPadding(14, 6, 14, 6)
-                            layoutParams = LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { setMargins(0, 0, 8, 0) }
-                            setOnClickListener {
-                                feedback(it)
-                                appLauncher.launchApp(app.packageName)
-                                closeFeatureDrawer()
-                            }
-                        }
-                        featureDrawerContainer.addView(chip)
-                    }
-                } else {
-                    val emptyTv = TextView(this).apply {
-                        text = "No launchable apps found"
-                        setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_secondary))
-                        textSize = 12f
-                        setPadding(12, 6, 12, 6)
-                    }
-                    featureDrawerContainer.addView(emptyTv)
+                if (allApps.isEmpty()) featureDrawerContainer.addView(drawerNote("No apps found"))
+                for (app in allApps) {
+                    featureDrawerContainer.addView(chip(app.name) {
+                        appLauncher.launchApp(app.packageName)
+                        closeFeatureDrawer()
+                    })
                 }
             }
             "font" -> {
@@ -608,26 +571,79 @@ class KeyboardIME : InputMethodService() {
                     "𝔻𝕠𝕦𝕓𝕝𝕖" to FancyFontConverter.Style.DOUBLE_STRUCK
                 )
                 for ((label, style) in styles) {
-                    val chip = TextView(this).apply {
-                        text = if (activeFancyStyle == style) "✓ $label" else label
-                        setTextColor(if (activeFancyStyle == style) ContextCompat.getColor(this@KeyboardIME, R.color.kb_accent) else ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                        background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                        textSize = 12f
-                        setPadding(14, 6, 14, 6)
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { setMargins(0, 0, 8, 0) }
-                        setOnClickListener {
-                            feedback(it)
-                            activeFancyStyle = style
-                            closeFeatureDrawer()
-                        }
-                    }
-                    featureDrawerContainer.addView(chip)
+                    featureDrawerContainer.addView(chip(label, accent = activeFancyStyle == style) {
+                        activeFancyStyle = style
+                        closeFeatureDrawer()
+                    })
                 }
             }
         }
+    }
+
+    /**
+     * Real translation, on the device (Google ML Kit): the selection, or what was typed before the
+     * cursor, is translated into the chosen language and replaces the original. The source
+     * language is detected automatically; each language model downloads once.
+     */
+    private fun showTranslateDrawer() {
+        val targets = listOf(
+            "en" to "English", "ar" to "Arabic", "fr" to "French", "es" to "Spanish", "de" to "German",
+            "hi" to "Hindi", "ta" to "Tamil", "ur" to "Urdu", "tr" to "Turkish", "ru" to "Russian",
+            "zh" to "Chinese", "ja" to "Japanese", "it" to "Italian", "pt" to "Portuguese"
+        )
+        val preferred = prefs.translateTarget.ifEmpty { prefs.secondaryLanguage }
+        val ordered = targets.sortedByDescending { it.first == preferred }
+        for ((code, name) in ordered) {
+            featureDrawerContainer.addView(chip(name, accent = code == preferred, icon = R.drawable.ic_kb_translate) {
+                prefs.translateTarget = code
+                translateField(code, name)
+            })
+        }
+    }
+
+    private fun translateField(targetCode: String, targetName: String) {
+        val (text, isSelection) = currentFieldText()
+        if (text.isBlank()) {
+            Toast.makeText(this, "Type or select text, then pick a language", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val target = TranslateLanguage.fromLanguageTag(targetCode) ?: return
+        Toast.makeText(this, "Translating to $targetName…", Toast.LENGTH_SHORT).show()
+        LanguageIdentification.getClient().identifyLanguage(text)
+            .addOnSuccessListener { detected ->
+                val source = TranslateLanguage.fromLanguageTag(detected)
+                    ?: TranslateLanguage.ENGLISH
+                if (source == target) {
+                    Toast.makeText(this, "That's already $targetName", Toast.LENGTH_SHORT).show()
+                    return@addOnSuccessListener
+                }
+                val client = Translation.getClient(
+                    TranslatorOptions.Builder().setSourceLanguage(source).setTargetLanguage(target).build()
+                )
+                client.downloadModelIfNeeded()
+                    .continueWithTask { task ->
+                        if (!task.isSuccessful) throw task.exception ?: IllegalStateException("download failed")
+                        client.translate(text)
+                    }
+                    .addOnSuccessListener { translated ->
+                        val ic = currentInputConnection
+                        if (ic != null && translated.isNotEmpty()) {
+                            ic.beginBatchEdit()
+                            if (!isSelection) ic.deleteSurroundingText(text.length, 0)
+                            ic.commitText(translated, 1)
+                            ic.endBatchEdit()
+                        }
+                        client.close()
+                        closeFeatureDrawer()
+                    }
+                    .addOnFailureListener {
+                        client.close()
+                        Toast.makeText(this, "Couldn't translate. The first use of a language needs internet.", Toast.LENGTH_LONG).show()
+                    }
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "Couldn't detect the language", Toast.LENGTH_SHORT).show()
+            }
     }
 
     private fun closeFeatureDrawer() {
@@ -650,69 +666,37 @@ class KeyboardIME : InputMethodService() {
         smartIdleScroll.visibility = View.VISIBLE
         smartIdleContainer.removeAllViews()
 
-        // 1. Instant Paste chip if clipboard has content
+        // 1. Paste what's on the clipboard right now.
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()
         if (!clip.isNullOrEmpty()) {
-            val preview = if (clip.length > 15) clip.take(13) + "..." else clip
-            val pasteChip = TextView(this).apply {
-                text = "📋 Paste: \"$preview\""
-                setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_accent))
-                background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                textSize = 12f
-                setPadding(12, 6, 12, 6)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 6, 0) }
-                setOnClickListener {
-                    feedback(it)
-                    currentInputConnection?.commitText(clip, 1)
-                }
-            }
-            smartIdleContainer.addView(pasteChip)
+            prefs.recordClip(clip)
+            smartIdleContainer.addView(chip(clip.replace('\n', ' '), accent = true, icon = R.drawable.ic_kb_clipboard) {
+                currentInputConnection?.commitText(clip, 1)
+            })
         }
 
-        // 2. Quick phrase shortcuts
-        val quickPhrases = listOf("Hi! 👋", "Thanks! 🙏", "On my way 🚗", "Sounds good 👍", "OK 👌")
-        for (qp in quickPhrases) {
-            val qpChip = TextView(this).apply {
-                text = qp
-                setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                textSize = 12f
-                setPadding(12, 6, 12, 6)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 6, 0) }
-                setOnClickListener {
-                    feedback(it)
-                    currentInputConnection?.commitText("$qp ", 1)
-                }
-            }
-            smartIdleContainer.addView(qpChip)
+        // 2. Emoji you actually use, most recent first.
+        val emojis = prefs.recentEmojis.take(8)
+        if (emojis.isEmpty()) {
+            smartIdleContainer.addView(chip("Emoji", icon = R.drawable.ic_kb_emoji) {
+                currentMode = KeyboardMode.EMOJI
+                renderKeyboard()
+            })
+        }
+        for (emoji in emojis) {
+            smartIdleContainer.addView(chip(emoji) {
+                prefs.recordEmoji(emoji)
+                currentInputConnection?.commitText(emoji, 1)
+            }.apply {
+                textSize = 16f
+                setPadding(dp(10), 0, dp(10), 0)
+            })
         }
 
-        // 3. Top frequent emojis
-        val topEmojis = listOf("😊", "😂", "👍", "❤️", "🔥", "🎉", "✨")
-        for (emoji in topEmojis) {
-            val emojiChip = TextView(this).apply {
-                text = emoji
-                setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_primary))
-                background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_toolbar_pill)
-                textSize = 13f
-                setPadding(10, 5, 10, 5)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 6, 0) }
-                setOnClickListener {
-                    feedback(it)
-                    currentInputConnection?.commitText(emoji, 1)
-                }
-            }
-            smartIdleContainer.addView(emojiChip)
+        // 3. Your own quick replies.
+        for (reply in prefs.quickReplies.take(6)) {
+            smartIdleContainer.addView(chip(reply) { currentInputConnection?.commitText("$reply ", 1) })
         }
     }
 
@@ -1144,20 +1128,20 @@ class KeyboardIME : InputMethodService() {
 
     private fun renderEmojiMode() {
         for (emoji in emojiRow1) {
-            row1.addView(createKey(emoji, weight = 1f) { commitCharacter(emoji) })
+            row1.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
         }
         for (emoji in emojiRow2) {
-            row2.addView(createKey(emoji, weight = 1f) { commitCharacter(emoji) })
+            row2.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
         }
         for (emoji in emojiRow3) {
-            row3.addView(createKey(emoji, weight = 1f) { commitCharacter(emoji) })
+            row3.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
         }
 
         row4.addView(createActionKey("ABC", weight = 1.5f) {
             currentMode = KeyboardMode.LETTERS
             renderKeyboard()
         })
-        row4.addView(createKey("❤️", weight = 1f) { commitCharacter("❤️") })
+        row4.addView(createKey("❤️", weight = 1f) { commitEmoji("❤️") })
         row4.addView(createSpacebarKey(weight = 3.5f))
         row4.addView(createBackspaceKey(weight = 1.5f))
         row4.addView(createEnterKey(weight = 1.5f))
@@ -1169,7 +1153,6 @@ class KeyboardIME : InputMethodService() {
         val eventUp = KeyEvent(KeyEvent.ACTION_UP, keyCode)
         ic.sendKeyEvent(eventDown)
         ic.sendKeyEvent(eventUp)
-        sendDownUpKeyEvents(keyCode)
     }
 
     private fun renderCursorDpadMode() {
@@ -1632,6 +1615,12 @@ class KeyboardIME : InputMethodService() {
 
     private fun commitCharacter(char: String) {
         currentInputConnection?.commitText(char, 1)
+    }
+
+    /** Emoji typed from the emoji panel feed the "recent emoji" chips. */
+    private fun commitEmoji(emoji: String) {
+        prefs.recordEmoji(emoji)
+        commitCharacter(emoji)
     }
 
     private fun deleteChar() {
