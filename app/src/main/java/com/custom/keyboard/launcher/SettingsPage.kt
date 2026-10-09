@@ -151,9 +151,19 @@ class SettingsPage(
             prefs.columns = if (i == 0) 4 else 6
             host.applyLookAndFeel()
         })
-        page.addView(chipSetting("Tile gap", listOf("None", "Thin", "Normal", "Wide"), listOf(0, 2, 4, 8), prefs.gutterDp) { prefs.gutterDp = it })
-        page.addView(chipSetting("Corners", listOf("Square", "Soft", "Round"), listOf(0, 6, 14), prefs.cornerRadiusDp) { prefs.cornerRadiusDp = it })
-        page.addView(chipSetting("Tile transparency", listOf("Solid", "Light", "Medium", "Sheer"), listOf(100, 85, 70, 50), prefs.tileOpacity) { prefs.tileOpacity = it })
+        page.addView(ui.slider("Tile gap", 0, 12, prefs.gutterDp, format = { if (it == 0) "None" else "$it dp" }) { v ->
+            if (v != prefs.gutterDp) {
+                prefs.gutterDp = v
+                host.applyLookAndFeel()
+            }
+        })
+        page.addView(cornerSetting())
+        page.addView(ui.slider("Tile colour strength", 20, 100, prefs.tileOpacity, format = { if (it >= 100) "Solid" else "$it%" }) { v ->
+            if (v != prefs.tileOpacity) {
+                prefs.tileOpacity = v
+                host.applyLookAndFeel()
+            }
+        })
         page.addView(ui.caption("Tile finish"))
         page.addView(ui.chips(listOf("Flat", "Frosted glass"), if (prefs.tileFinish == "glass") 1 else 0) { i ->
             prefs.tileFinish = if (i == 1) "glass" else "flat"
@@ -425,6 +435,40 @@ class SettingsPage(
         })
         page.addView(ui.action(R.drawable.ic_m_moon, "Glance as screen saver", "Settings › Screen saver › Glance, when charging or docked") { host.openScreenSaverSettings() })
         page.addView(ui.caption("Live tiles only update while Start is on screen. Steps, switches and screen time stop listening when you leave Start."))
+    }
+
+    /** Corner roundness slider with a live preview of three tiles. */
+    private fun cornerSetting(): View {
+        val box = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val preview = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(ui.dp(20), ui.dp(6), ui.dp(20), 0)
+        }
+        val samples = listOf(56, 56, 116).mapIndexed { i, w ->
+            View(context).also { v ->
+                preview.addView(v, LinearLayout.LayoutParams(ui.dp(w), ui.dp(56)).apply { if (i > 0) marginStart = ui.dp(6) })
+            }
+        }
+        fun paint(radiusDp: Int) = samples.forEachIndexed { i, v ->
+            v.background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = ui.dp(radiusDp).toFloat()
+                val a = prefs.accentColorInt
+                setColor(Color.argb(if (i == 1) 170 else 255, Color.red(a), Color.green(a), Color.blue(a)))
+            }
+        }
+        paint(prefs.cornerRadiusDp)
+        box.addView(ui.slider(
+            "Tile corners", 0, 24, prefs.cornerRadiusDp,
+            format = { if (it == 0) "Square" else "$it dp" },
+            onMove = { paint(it) }
+        ) { value ->
+            if (value != prefs.cornerRadiusDp) {
+                prefs.cornerRadiusDp = value
+                host.applyLookAndFeel()
+            }
+        })
+        box.addView(preview)
+        return box
     }
 
     private fun chipSetting(title: String, labels: List<String>, values: List<Int>, current: Int, save: (Int) -> Unit): View =

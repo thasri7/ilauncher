@@ -297,6 +297,50 @@ class MetroUi(val context: Context, private val accentProvider: () -> Int) {
         return box
     }
 
+    /**
+     * A Metro slider: title and value on one line, the track below. [onMove] runs live while
+     * dragging (keep it cheap), [onDone] once the finger lifts.
+     */
+    fun slider(
+        title: String,
+        min: Int,
+        max: Int,
+        value: Int,
+        format: (Int) -> String,
+        onMove: (Int) -> Unit = {},
+        onDone: (Int) -> Unit
+    ): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(10), dp(12), dp(4))
+        val label = text(format(value), 13f, accentText, medium)
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(text(title, 15f), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(label)
+        })
+        addView(android.widget.SeekBar(context).apply {
+            this.max = max - min
+            progress = (value - min).coerceIn(0, max - min)
+            progressTintList = ColorStateList.valueOf(accent)
+            thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            progressBackgroundTintList = ColorStateList.valueOf(0x4DFFFFFF)
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
+                    label.text = format(progress + min)
+                    if (fromUser) onMove(progress + min)
+                }
+
+                override fun onStartTrackingTouch(bar: android.widget.SeekBar) {}
+
+                override fun onStopTrackingTouch(bar: android.widget.SeekBar) = onDone(bar.progress + min)
+            })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = -dp(8)
+        })
+    }
+
     /** Colour grid, five per row. A null entry is the "follow accent" swatch. */
     fun swatches(colors: List<Int?>, selected: Int?, onPick: (Int?) -> Unit): View {
         val grid = LinearLayout(context).apply {
