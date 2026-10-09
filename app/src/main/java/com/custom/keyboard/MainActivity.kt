@@ -97,15 +97,15 @@ class MainActivity : AppCompatActivity() {
         // 2. Keyboard Height
         val rgHeight = findViewById<RadioGroup>(R.id.rg_height)
         when (prefs.rowHeightDp) {
-            48 -> rgHeight.check(R.id.rb_height_compact)
-            60 -> rgHeight.check(R.id.rb_height_tall)
+            40 -> rgHeight.check(R.id.rb_height_compact)
+            52 -> rgHeight.check(R.id.rb_height_tall)
             else -> rgHeight.check(R.id.rb_height_normal)
         }
         rgHeight.setOnCheckedChangeListener { _, checkedId ->
             when (checkedId) {
-                R.id.rb_height_compact -> prefs.rowHeightDp = 48
-                R.id.rb_height_normal -> prefs.rowHeightDp = 54
-                R.id.rb_height_tall -> prefs.rowHeightDp = 60
+                R.id.rb_height_compact -> prefs.rowHeightDp = 40
+                R.id.rb_height_normal -> prefs.rowHeightDp = 46
+                R.id.rb_height_tall -> prefs.rowHeightDp = 52
             }
         }
 

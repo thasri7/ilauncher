@@ -36,7 +36,18 @@ class TextAppsPage(
     private val onMenu: (AppLauncherHelper.AppEntry, View) -> Unit
 ) : FrameLayout(context) {
 
-    data class Item(val app: AppLauncherHelper.AppEntry, val level: Int, val color: Int)
+    /**
+     * One name: [label] is the name shown (the user may rename it here), [badge] the number of
+     * notifications, and [hidden] names only appear when they match a search.
+     */
+    data class Item(
+        val app: AppLauncherHelper.AppEntry,
+        val level: Int,
+        val color: Int,
+        val label: String = app.name,
+        val badge: Int = 0,
+        val hidden: Boolean = false
+    )
 
     private val density = resources.displayMetrics.density
     private fun dp(v: Int) = (v * density).toInt()
@@ -102,6 +113,10 @@ class TextAppsPage(
         strip.setPadding(0, dp(8), 0, px + dp(8))
     }
 
+    fun setAccent(color: Int) {
+        strip.accent = color
+    }
+
     fun clearSearch() {
         if (search.text.isNotEmpty()) search.setText("")
     }
@@ -115,25 +130,44 @@ class TextAppsPage(
         flow.align = prefs.textAlign
         flow.setPadding(dp(18), dp(4), if (prefs.textLetterStrip) dp(34) else dp(18), 0)
         val face = when (prefs.textFont) {
+            "custom" -> TextFonts.custom(context) ?: Typeface.create("sans-serif-light", Typeface.NORMAL)
             "bold" -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
             "regular" -> Typeface.create("sans-serif", Typeface.NORMAL)
             else -> Typeface.create("sans-serif-light", Typeface.NORMAL)
         }
+        setBackgroundColor(when (prefs.textBackground) {
+            "dim" -> 0x99000000.toInt()
+            "black" -> Color.BLACK
+            else -> Color.TRANSPARENT
+        })
+        val opacity = prefs.textOpacity.coerceIn(20, 100) / 100f
+        val badgeColor = strip.accent
         flow.removeAllViews()
         views = list.map { item ->
             val tv = TextView(context).apply {
-                text = when (prefs.textCase) {
-                    "upper" -> item.app.name.uppercase(Locale.getDefault())
-                    "asis" -> item.app.name
-                    else -> item.app.name.lowercase(Locale.getDefault())
+                val name = when (prefs.textCase) {
+                    "upper" -> item.label.uppercase(Locale.getDefault())
+                    "asis" -> item.label
+                    else -> item.label.lowercase(Locale.getDefault())
                 }
+                text = if (item.badge > 0 && prefs.textNotify) {
+                    // A small raised count, like a footnote, marks apps with notifications.
+                    android.text.SpannableStringBuilder(name).apply {
+                        val start = length
+                        append(if (item.badge > 99) "99+" else item.badge.toString())
+                        setSpan(android.text.style.SuperscriptSpan(), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        setSpan(android.text.style.RelativeSizeSpan(0.45f), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        setSpan(android.text.style.ForegroundColorSpan(badgeColor), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                } else name
                 typeface = face
                 setTextColor(item.color)
+                tag = opacity
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, TextCloud.sizeSp(item.level, prefs.textMinSp, prefs.textMaxSp))
                 includeFontPadding = false
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                setShadowLayer(4f, 0f, 1f, 0x99000000.toInt())
+                if (prefs.textShadow) setShadowLayer(4f, 0f, 1f, 0x99000000.toInt())
                 isClickable = true
                 isFocusable = true
                 background = android.graphics.drawable.RippleDrawable(
@@ -147,18 +181,20 @@ class TextAppsPage(
                     onMenu(item.app, this)
                     true
                 }
-                contentDescription = item.app.name
+                contentDescription = item.label + if (item.badge > 0) ", ${item.badge} notifications" else ""
             }
             flow.addView(tv)
             item to tv
         }
-        strip.letters = list.mapNotNull { it.app.name.firstOrNull()?.uppercaseChar()?.let { c -> if (c in 'A'..'Z') c else '#' } }.toSet()
+        strip.letters = list.filter { !it.hidden }.mapNotNull { it.label.firstOrNull()?.uppercaseChar()?.let { c -> if (c in 'A'..'Z') c else '#' } }.toSet()
         applyFilter(null)
     }
 
     private fun matches(item: Item, letter: Char?): Boolean {
-        val name = item.app.name
-        val okQuery = query.isEmpty() || name.contains(query, ignoreCase = true) ||
+        val name = item.label
+        // Hidden names show up only when searched for, like in AP15.
+        if (item.hidden && query.isEmpty()) return false
+        val okQuery = query.isEmpty() || name.contains(query, ignoreCase = true) || item.app.name.contains(query, ignoreCase = true) ||
             name.split(' ').any { it.startsWith(query, ignoreCase = true) }
         val first = name.firstOrNull()?.uppercaseChar()?.let { if (it in 'A'..'Z') it else '#' }
         val okLetter = letter == null || first == letter
@@ -173,7 +209,8 @@ class TextAppsPage(
             val queryOk = matches(item, null)
             tv.visibility = if (queryOk) View.VISIBLE else View.GONE
             tv.animate().cancel()
-            tv.alpha = if (letter == null || matches(item, letter)) 1f else 0.18f
+            val rest = tv.tag as? Float ?: 1f
+            tv.alpha = if (letter == null || matches(item, letter)) rest else 0.18f * rest
         }
     }
 
@@ -252,6 +289,7 @@ class TextAppsPage(
                 invalidate()
             }
         var onLetter: ((Char?, Boolean) -> Unit)? = null
+        var accent: Int = Color.WHITE
         private val all = listOf('#') + ('A'..'Z')
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER

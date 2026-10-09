@@ -116,6 +116,35 @@ class TilePreferences(context: Context) {
     var textAlign by stringPref("text_align", "start")
     var textSpacingDp by intPref("text_spacing_dp", 10)
     var textLetterStrip by boolPref("text_letter_strip", true)
+    /** "use" (names grow with use) or "equal" (every name the same size). */
+    var textSizing by stringPref("text_sizing", "use")
+    /** Opacity of names in percent. */
+    var textOpacity by intPref("text_opacity", 100)
+    var textShadow by boolPref("text_shadow", true)
+    /** Behind the Text page: "wallpaper", "dim" or "black". */
+    var textBackground by stringPref("text_background", "wallpaper")
+    /** Mark apps that have notifications. */
+    var textNotify by boolPref("text_notify", true)
+
+    /** Per-app Text page settings: custom name, colour, fixed size, hidden. */
+    data class TextOverride(val name: String = "", val color: String = "", val level: Int = -1, val hidden: Boolean = false) {
+        val isDefault get() = name.isEmpty() && color.isEmpty() && level < 0 && !hidden
+    }
+
+    fun textOverrides(): Map<String, TextOverride> = runCatching {
+        val o = JSONObject(prefs.getString("text_overrides", "{}") ?: "{}")
+        o.keys().asSequence().associateWith { k ->
+            val v = o.getJSONObject(k)
+            TextOverride(v.optString("name"), v.optString("color"), v.optInt("level", -1), v.optBoolean("hidden"))
+        }
+    }.getOrDefault(emptyMap())
+
+    fun setTextOverride(pkg: String, value: TextOverride) {
+        val o = runCatching { JSONObject(prefs.getString("text_overrides", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        if (value.isDefault) o.remove(pkg) else o.put(pkg, JSONObject()
+            .put("name", value.name).put("color", value.color).put("level", value.level).put("hidden", value.hidden))
+        prefs.edit().putString("text_overrides", o.toString()).apply()
+    }
     var textSearch by boolPref("text_search", true)
 
     /** Days for an unused app's weight to halve on the Text page. */

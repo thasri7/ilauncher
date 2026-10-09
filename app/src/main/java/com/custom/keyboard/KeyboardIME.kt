@@ -273,14 +273,12 @@ class KeyboardIME : InputMethodService() {
         ssb.append(secondary)
         val end = ssb.length
         val hintColor = ContextCompat.getColor(this, R.color.kb_hint_color)
-        ssb.setSpan(RelativeSizeSpan(0.5f), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ssb.setSpan(RelativeSizeSpan(0.48f), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         ssb.setSpan(ForegroundColorSpan(hintColor), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         ssb.append("\n")
-        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_OPPOSITE), 0, ssb.length, Spanned.SPAN_INCLUSIVE_EXCLUSIVE)
-        val start = ssb.length
         ssb.append(displayChar)
-        ssb.setSpan(RelativeSizeSpan(1.05f), start, ssb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_CENTER), start, ssb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // Both lines centred: the symbol small above, the letter in the middle of the key.
+        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_CENTER), 0, ssb.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         return ssb
     }
 
@@ -1381,9 +1379,10 @@ class KeyboardIME : InputMethodService() {
             if (secondary != null) {
                 // Two lines (symbol, letter) packed tight so both fit any key height.
                 includeFontPadding = false
-                setLineSpacing(0f, 0.82f)
+                setLineSpacing(0f, 0.86f)
                 gravity = Gravity.CENTER
-                setPadding(0, 0, (5 * resources.displayMetrics.density).toInt(), (2 * resources.displayMetrics.density).toInt())
+                // Lifted a touch so the letter, not the pair, sits in the middle of the key.
+                setPadding(0, 0, 0, (4 * resources.displayMetrics.density).toInt())
             } else {
                 setPadding(0, 0, 0, 0)
             }

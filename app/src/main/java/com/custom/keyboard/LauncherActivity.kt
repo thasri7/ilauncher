@@ -253,7 +253,10 @@ class LauncherActivity : AppCompatActivity() {
         }
     }
 
-    private val notificationsChanged: () -> Unit = { tileAdapter.onNotificationsChanged() }
+    private val notificationsChanged: () -> Unit = {
+        tileAdapter.onNotificationsChanged()
+        if (pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) refreshTextPage()
+    }
 
     private val userPresentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -677,7 +680,7 @@ class LauncherActivity : AppCompatActivity() {
         val page = textPage ?: TextAppsPage(
             this, prefs,
             onOpen = { app, view -> launchApp(app.packageName, view) },
-            onMenu = { app, view -> showDrawerAppMenu(app, view) }
+            onMenu = { app, view -> showTextAppMenu(app, view) }
         ).also { textPage = it }
         page.setBottomInset(systemInsets.bottom)
         refreshTextPage()
@@ -695,16 +698,32 @@ class LauncherActivity : AppCompatActivity() {
             val pkg = t.packageName ?: return@forEach
             tileLevels[pkg] = maxOf(tileLevels[pkg] ?: 0, TextCloud.levelForTile(t.size.cols, t.size.rows))
         }
-        val levels = TextCloud.levels(apps.map { it.packageName }, heat) { tileLevels[it] ?: 0 }
+        val overrides = prefs.textOverrides()
+        val auto = TextCloud.levels(apps.map { it.packageName }, heat) { tileLevels[it] ?: 0 }
+        // A size the user fixed for an app wins; "All the same size" puts everyone in the middle.
+        val levels = apps.associate { app ->
+            val fixed = overrides[app.packageName]?.level ?: -1
+            app.packageName to when {
+                fixed >= 0 -> fixed
+                prefs.textSizing == "equal" -> 2
+                else -> auto[app.packageName] ?: 0
+            }
+        }
         val ordered = when (prefs.textOrder) {
             "use" -> apps.sortedWith(compareByDescending<AppLauncherHelper.AppEntry> { heat[it.packageName] ?: 0.0 }.thenBy { it.name.lowercase() })
             "size" -> apps.sortedWith(compareByDescending<AppLauncherHelper.AppEntry> { levels[it.packageName] ?: 0 }.thenBy { it.name.lowercase() })
             else -> apps.sortedBy { it.name.lowercase() }
         }
         val dims = intArrayOf(0x8CFFFFFF.toInt(), 0xB3FFFFFF.toInt(), 0xD9FFFFFF.toInt(), Color.WHITE, Color.WHITE)
+        // "Heat": unused apps cool grey-blue, then through the accent to warm orange for favourites.
+        val heatColors = intArrayOf(0xFF8FA3B8.toInt(), 0xFFB8C7D9.toInt(), ui.accentText, 0xFFFFB347.toInt(), 0xFFFF7A45.toInt())
+        page.setAccent(ui.accentText)
         page.submit(ordered.map { app ->
             val level = levels[app.packageName] ?: 0
-            val color = when (prefs.textColor) {
+            val override = overrides[app.packageName]
+            val custom = override?.color?.takeIf { it.isNotEmpty() }?.let { runCatching { Color.parseColor(it) }.getOrNull() }
+            val color = custom ?: when (prefs.textColor) {
+                "heat" -> heatColors[level]
                 "white" -> dims[level]
                 "app" -> icons.tileColor(app.packageName)?.let { c ->
                     // Lifted towards white so names stay readable on the wallpaper.
@@ -712,8 +731,61 @@ class LauncherActivity : AppCompatActivity() {
                 } ?: dims[level]
                 else -> if (level >= 3) ui.accentText else dims[level]
             }
-            TextAppsPage.Item(app, level, color)
+            TextAppsPage.Item(
+                app, level, color,
+                label = override?.name?.takeIf { it.isNotEmpty() } ?: app.name,
+                badge = NotificationHub.get(app.packageName)?.count ?: 0,
+                hidden = override?.hidden == true
+            )
         })
+    }
+
+    /** Long-press on the Text page: this page's own options for the app, then the usual ones. */
+    private fun showTextAppMenu(app: AppLauncherHelper.AppEntry, anchor: View) {
+        val card = ui.card()
+        val o = prefs.textOverrides()[app.packageName] ?: TilePreferences.TextOverride()
+        card.addView(ui.header(o.name.ifEmpty { app.name }, "On the Text page"))
+        card.addView(ui.sectionTitle("Size"))
+        card.addView(ui.chips(listOf("Auto", "XS", "S", "M", "L", "XL"), o.level + 1) { i ->
+            prefs.setTextOverride(app.packageName, o.copy(level = i - 1))
+            refreshTextPage()
+        })
+        card.addView(ui.sectionTitle("Colour"))
+        val swatches: List<Int?> = listOf<Int?>(null) + METRO_ACCENTS.map { Color.parseColor(it.second) } + listOf(Color.WHITE)
+        val current = o.color.takeIf { it.isNotEmpty() }?.let { runCatching { Color.parseColor(it) }.getOrNull() }
+        card.addView(ui.swatches(swatches, current) { picked ->
+            prefs.setTextOverride(app.packageName, o.copy(color = picked?.let { String.format("#%06X", 0xFFFFFF and it) }.orEmpty()))
+            refreshTextPage()
+        })
+        card.addView(ui.action(R.drawable.ic_m_edit, "Rename here", "Only changes the name on this page") {
+            prompt("Name on Text page", o.name.ifEmpty { app.name }, "Name", allowEmpty = true) { name ->
+                prefs.setTextOverride(app.packageName, o.copy(name = if (name == app.name) "" else name))
+                refreshTextPage()
+            }
+        })
+        card.addView(ui.action(R.drawable.ic_m_close, if (o.hidden) "Show on this page" else "Hide from this page", "Hidden names still come up when you search") {
+            metroOverlay.dismiss()
+            prefs.setTextOverride(app.packageName, o.copy(hidden = !o.hidden))
+            refreshTextPage()
+        })
+        if (!o.isDefault) card.addView(ui.action(R.drawable.ic_m_reset, "Reset this name") {
+            metroOverlay.dismiss()
+            prefs.setTextOverride(app.packageName, TilePreferences.TextOverride())
+            refreshTextPage()
+        })
+        card.addView(ui.divider())
+        card.addView(ui.action(R.drawable.ic_m_more, "More", "Pin to Start, app info, uninstall…") { showDrawerAppMenu(app, anchor) })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private val fontPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        if (com.custom.keyboard.launcher.TextFonts.import(this, uri)) {
+            prefs.textFont = "custom"
+            refreshTextPage()
+            toast("Font added to the Text page")
+        } else toast("That isn't a font file Android can read (.ttf or .otf)")
+        if (metroOverlay.isShowing) settingsPage.show("text", animate = false)
     }
 
     private fun swapTitle(text: String) {
@@ -733,7 +805,8 @@ class LauncherActivity : AppCompatActivity() {
         rv.adapter = tileAdapter
         rv.itemAnimator = MetroItemAnimator(
             motionView = { holder -> tileAdapter.motionView(rv, holder.itemView) },
-            dragHint = { holder -> tileAdapter.takeDragResizeHint(holder) }
+            dragHint = { holder -> tileAdapter.takeDragResizeHint(holder) },
+            rest = { holder -> tileAdapter.restState(holder) }
         ).apply {
             moveDuration = 280
             changeDuration = 160
@@ -2634,6 +2707,13 @@ class LauncherActivity : AppCompatActivity() {
             if (!prefs.textPageEnabled) textPage = null
             refreshTextPage()
         }
+        override fun pickTextFont() = fontPicker.launch(arrayOf("font/ttf", "font/otf", "font/*", "application/x-font-ttf", "application/x-font-otf", "application/octet-stream"))
+        override fun removeTextFont() {
+            com.custom.keyboard.launcher.TextFonts.remove(this@LauncherActivity)
+            if (prefs.textFont == "custom") prefs.textFont = "light"
+            refreshTextPage()
+        }
+        override val hasTextFont: Boolean get() = com.custom.keyboard.launcher.TextFonts.hasCustom(this@LauncherActivity)
         override fun resetTextSizes() {
             prefs.resetHeat()
             refreshTextPage()
@@ -3576,8 +3656,10 @@ class LauncherActivity : AppCompatActivity() {
         applyWallpaperAccent()
         prefs.takePendingPins().forEach { pinShortcut(it.packageName, it.shortcutId, it.label) }
         if (pendingRestyles.isNotEmpty()) {
-            tiles.filter { it.id in pendingRestyles }.forEach { tileAdapter.refresh(it) }
+            // Grow after the tiles have swung back in, so the growth is seen.
+            val grown = tiles.filter { it.id in pendingRestyles }
             pendingRestyles.clear()
+            handler.postDelayed({ grown.forEach { tileAdapter.refresh(it) } }, 520)
         }
         handler.removeCallbacks(liveTick)
         handler.postDelayed(liveTick, 2500)

@@ -979,6 +979,13 @@ class MetroTileAdapter(
         else -> hasUnread(tile)
     }
 
+    /** Resting scale and alpha of a tile's frame: smaller and dimmer when customising, unless selected. */
+    fun restState(holder: RecyclerView.ViewHolder): Pair<Float, Float> {
+        val tile = (holder as? TileHolder)?.tile ?: return 1f to 1f
+        if (!editMode || tile.id == selectedId) return 1f to 1f
+        return 0.9f to 0.7f
+    }
+
     /** The view that Metro motion (tilt, turnstile, edit-mode shrink) animates for a tile. */
     fun motionView(rv: RecyclerView, child: View): View =
         (rv.getChildViewHolder(child) as? TileHolder)?.frame ?: child

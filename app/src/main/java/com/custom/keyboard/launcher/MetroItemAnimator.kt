@@ -15,7 +15,9 @@ import androidx.recyclerview.widget.RecyclerView.ItemAnimator.ItemHolderInfo
 class MetroItemAnimator(
     private val motionView: (RecyclerView.ViewHolder) -> View?,
     /** Where a drag-resize left the tile, if this change came from one. */
-    private val dragHint: (RecyclerView.ViewHolder) -> Rect? = { null }
+    private val dragHint: (RecyclerView.ViewHolder) -> Rect? = { null },
+    /** The scale and alpha a tile rests at (smaller and dimmer in customise mode). */
+    private val rest: (RecyclerView.ViewHolder) -> Pair<Float, Float> = { 1f to 1f }
 ) : DefaultItemAnimator() {
 
     private class Info : ItemHolderInfo() {
@@ -55,14 +57,19 @@ class MetroItemAnimator(
         val newH = postInfo.bottom - postInfo.top
         dispatchChangeFinished(newHolder, true)
         if (newW <= 0 || newH <= 0) return false
-        val restScale = view.scaleX.takeIf { it > 0f } ?: 1f
+        // Never read the rest state from the view: another animation (the turnstile when coming
+        // back from an app) may have it half-way, e.g. fully transparent.
+        val (restScale, restAlpha) = rest(newHolder)
         view.animate().cancel()
+        view.rotationX = 0f
+        view.rotationY = 0f
         if (oldW == newW && oldH == newH) {
             // Same size (colour, name, live toggle): a quick pop.
             MetroMotion.centerPivot(view)
             view.scaleX = restScale * 0.9f
             view.scaleY = restScale * 0.9f
-            view.animate().setStartDelay(0).scaleX(restScale).scaleY(restScale).setDuration(220)
+            view.alpha = restAlpha
+            view.animate().setStartDelay(0).scaleX(restScale).scaleY(restScale).alpha(restAlpha).setDuration(220)
                 .setInterpolator(decelerate).withLayer().start()
             return false
         }
@@ -74,7 +81,7 @@ class MetroItemAnimator(
         view.scaleX = restScale * oldW / newW
         view.scaleY = restScale * oldH / newH
         view.animate().setStartDelay(0)
-            .translationX(0f).translationY(0f).scaleX(restScale).scaleY(restScale)
+            .translationX(0f).translationY(0f).scaleX(restScale).scaleY(restScale).alpha(restAlpha)
             .setDuration(300).setInterpolator(decelerate).withLayer()
             .withEndAction { MetroMotion.centerPivot(view) }
             .start()

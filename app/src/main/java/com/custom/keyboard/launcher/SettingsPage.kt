@@ -41,6 +41,9 @@ class SettingsPage(
         fun applyDrawerSettings()
         fun applyTextPageSettings()
         fun resetTextSizes()
+        fun pickTextFont()
+        fun removeTextFont()
+        val hasTextFont: Boolean
         fun applySystemBars()
         fun showOverview()
         fun showArrange()
@@ -438,6 +441,24 @@ class SettingsPage(
             rerender()
         })
         if (!prefs.textPageEnabled) return
+        // AP15-style quick rules.
+        page.addView(ui.caption("Quick rules"))
+        page.addView(ui.chips(listOf("Favourites big", "Most used on top", "All the same", "Right side", "Usage colours"), -1) { i ->
+            when (i) {
+                0 -> { prefs.textSizing = "use"; prefs.textOrder = "az" }
+                1 -> { prefs.textSizing = "use"; prefs.textOrder = "use" }
+                2 -> prefs.textSizing = "equal"
+                3 -> prefs.textAlign = "end"
+                4 -> { prefs.textSizing = "use"; prefs.textColor = "heat" }
+            }
+            apply()
+            rerender()
+        })
+        page.addView(ui.caption("Size names by"))
+        page.addView(ui.chips(listOf("How much I use them", "All the same"), if (prefs.textSizing == "equal") 1 else 0) { i ->
+            prefs.textSizing = if (i == 1) "equal" else "use"
+            apply()
+        })
         val orders = listOf("az", "use", "size")
         page.addView(ui.caption("Order"))
         page.addView(ui.chips(listOf("A to Z", "Most used", "Biggest first"), orders.indexOf(prefs.textOrder).coerceAtLeast(0)) { i ->
@@ -458,16 +479,39 @@ class SettingsPage(
             prefs.textShrink = shrinks[i]
             apply()
         })
-        val colors = listOf("accent", "white", "app")
+        val colors = listOf("accent", "white", "app", "heat")
         page.addView(ui.caption("Colour"))
-        page.addView(ui.chips(listOf("Accent for top apps", "White", "App colours"), colors.indexOf(prefs.textColor).coerceAtLeast(0)) { i ->
+        page.addView(ui.chips(listOf("Accent for top apps", "White", "App colours", "Usage colours"), colors.indexOf(prefs.textColor).coerceAtLeast(0)) { i ->
             prefs.textColor = colors[i]
             apply()
         })
-        val fonts = listOf("light", "regular", "bold")
+        val fonts = if (host.hasTextFont) listOf("light", "regular", "bold", "custom") else listOf("light", "regular", "bold")
         page.addView(ui.caption("Font"))
-        page.addView(ui.chips(listOf("Light", "Regular", "Bold"), fonts.indexOf(prefs.textFont).coerceAtLeast(0)) { i ->
+        page.addView(ui.chips(listOf("Light", "Regular", "Bold", "My font").take(fonts.size), fonts.indexOf(prefs.textFont).coerceAtLeast(0)) { i ->
             prefs.textFont = fonts[i]
+            apply()
+        })
+        page.addView(ui.action(R.drawable.ic_m_add, if (host.hasTextFont) "Change my font" else "Add my own font", "Pick a .ttf or .otf file") { host.pickTextFont() })
+        if (host.hasTextFont) page.addView(ui.action(R.drawable.ic_m_close, "Remove my font") {
+            host.removeTextFont()
+            rerender()
+        })
+        page.addView(ui.slider("Name opacity", 30, 100, prefs.textOpacity, format = { "$it%" }) { v ->
+            prefs.textOpacity = v
+            apply()
+        })
+        page.addView(ui.toggleRow("Text shadow", "Keeps names readable on bright wallpapers", prefs.textShadow) {
+            prefs.textShadow = it
+            apply()
+        })
+        val backgrounds = listOf("wallpaper", "dim", "black")
+        page.addView(ui.caption("Behind the names"))
+        page.addView(ui.chips(listOf("Wallpaper", "Dimmed", "Black"), backgrounds.indexOf(prefs.textBackground).coerceAtLeast(0)) { i ->
+            prefs.textBackground = backgrounds[i]
+            apply()
+        })
+        page.addView(ui.toggleRow("Notification marks", "A small number next to apps with notifications", prefs.textNotify) {
+            prefs.textNotify = it
             apply()
         })
         val cases = listOf("lower", "asis", "upper")
@@ -495,7 +539,7 @@ class SettingsPage(
             apply()
         })
         page.addView(ui.action(R.drawable.ic_m_reset, "Reset name sizes", "Start counting use again; big tiles stay big") { host.resetTextSizes() })
-        page.addView(ui.caption("Names grow as you open apps and fade a step at a time when you stop. Apps with big tiles on Start show big here too."))
+        page.addView(ui.caption("Names grow as you open apps and fade a step at a time when you stop. Apps with big tiles on Start show big here too. Long-press a name to rename it, recolour it, fix its size or hide it."))
     }
 
     private fun battery(page: LinearLayout) {

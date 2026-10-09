@@ -13,8 +13,22 @@ class KeyboardPreferences(context: Context) {
         get() = prefs.getFloat(KEY_FONT_SIZE, 22f)
         set(value) = prefs.edit().putFloat(KEY_FONT_SIZE, value).apply()
 
+    /** Key row height: 40 compact, 46 normal (like most phone keyboards), 52 tall. */
     var rowHeightDp: Int
-        get() = prefs.getInt(KEY_ROW_HEIGHT, 54)
+        get() {
+            // Keys used to be taller (48/54/60); move saved sizes to the compact scale once.
+            if (!prefs.getBoolean("row_height_v2", false)) {
+                val old = prefs.getInt(KEY_ROW_HEIGHT, 54)
+                val new = when {
+                    old <= 48 -> 40
+                    old >= 60 -> 52
+                    else -> 46
+                }
+                prefs.edit().putInt(KEY_ROW_HEIGHT, new).putBoolean("row_height_v2", true).apply()
+                return new
+            }
+            return prefs.getInt(KEY_ROW_HEIGHT, 46)
+        }
         set(value) = prefs.edit().putInt(KEY_ROW_HEIGHT, value).apply()
 
     var typefaceStyle: String
