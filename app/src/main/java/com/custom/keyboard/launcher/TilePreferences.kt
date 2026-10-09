@@ -105,6 +105,7 @@ class TilePreferences(context: Context) {
             launchCount = obj.optInt("launchCount", 0),
             contactPhone = obj.optString("contactPhone", ""),
             liveEnabled = obj.optBoolean("liveEnabled", true),
+            sizeLocked = obj.optBoolean("sizeLocked", false),
             shortcutId = obj.optString("shortcutId").takeIf { it.isNotEmpty() },
             appWidgetId = obj.optInt("appWidgetId", -1)
         )
@@ -126,6 +127,7 @@ class TilePreferences(context: Context) {
                 put("launchCount", tile.launchCount)
                 put("contactPhone", tile.contactPhone)
                 put("liveEnabled", tile.liveEnabled)
+                put("sizeLocked", tile.sizeLocked)
                 put("shortcutId", tile.shortcutId ?: "")
                 put("appWidgetId", tile.appWidgetId)
                 if (tile.children.isNotEmpty()) put("children", tilesToJson(tile.children))
@@ -151,8 +153,8 @@ class TilePreferences(context: Context) {
     }
 
     /**
-     * Records a launch. Returns the tile that auto-grew from small to medium because it is used a
-     * lot, or null when no tile changed size.
+     * Records a launch. Returns the tile that auto-grew because it is used a lot (small → medium
+     * → wide, never for tiles the user sized themselves), or null when nothing changed size.
      */
     fun recordAppLaunch(packageName: String, tiles: MutableList<TileItem>): TileItem? {
         val usage = usageCounts().toMutableMap()
@@ -162,8 +164,9 @@ class TilePreferences(context: Context) {
         val tile = tiles.firstOrNull { it.packageName == packageName && it.shortcutId == null } ?: return null
         tile.launchCount++
         var grown: TileItem? = null
-        if (autoGrowEnabled && tile.launchCount >= 5 && tile.size == TileSize.SMALL) {
-            tile.size = TileSize.MEDIUM
+        val earned = TileSize.grownFor(tile.size, tile.launchCount)
+        if (autoGrowEnabled && !tile.sizeLocked && earned != tile.size) {
+            tile.size = earned
             grown = tile
         }
         saveTiles(tiles)

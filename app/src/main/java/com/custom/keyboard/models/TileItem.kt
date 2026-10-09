@@ -41,6 +41,16 @@ enum class TileSize(val cols: Int, val rows: Int, val label: String) {
 
     companion object {
         /**
+         * Smart auto-grow: the size an app tile earns from how often it is opened. Small starts
+         * growing at 5 launches and medium at 30; wide is the largest auto size.
+         */
+        fun grownFor(current: TileSize, launches: Int): TileSize = when {
+            current == SMALL && launches >= 5 -> if (launches >= 30) WIDE else MEDIUM
+            current == MEDIUM && launches >= 30 -> WIDE
+            else -> current
+        }
+
+        /**
          * Maps a tile saved by the old 2-column launcher (spanX/spanY of 1–2 half-width columns)
          * to the closest real tile size.
          */
@@ -64,6 +74,8 @@ data class TileItem(
     var launchCount: Int = 0,
     var contactPhone: String = "",
     var liveEnabled: Boolean = true,
+    /** Set when the user resized the tile themselves; auto-grow never changes it after that. */
+    var sizeLocked: Boolean = false,
     /** App shortcut (deep link) id when this app tile opens a shortcut instead of the app. */
     var shortcutId: String? = null,
     /** Bound widget id for WIDGET tiles, or -1. */

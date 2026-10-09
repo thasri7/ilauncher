@@ -20,6 +20,16 @@ class TileSizeTest {
     }
 
     @Test
+    fun autoGrowFollowsUsageButNeverShrinks() {
+        assertEquals(TileSize.SMALL, TileSize.grownFor(TileSize.SMALL, 4))
+        assertEquals(TileSize.MEDIUM, TileSize.grownFor(TileSize.SMALL, 5))
+        assertEquals(TileSize.WIDE, TileSize.grownFor(TileSize.SMALL, 30))
+        assertEquals(TileSize.WIDE, TileSize.grownFor(TileSize.MEDIUM, 30))
+        assertEquals(TileSize.LARGE, TileSize.grownFor(TileSize.LARGE, 100))
+        assertEquals(TileSize.WIDE, TileSize.grownFor(TileSize.WIDE, 0))
+    }
+
+    @Test
     fun everySizeButSmallIsWholeBlocks() {
         TileSize.entries.filter { it != TileSize.SMALL }.forEach {
             assertEquals(0, it.cols % 2)

@@ -19,6 +19,7 @@ import android.text.TextUtils
 import android.text.format.DateFormat
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -28,7 +29,6 @@ import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
@@ -278,7 +278,19 @@ class MetroTileAdapter(
 
     fun onBatteryChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.BATTERY_STATUS }
 
-    fun onNotificationsChanged() = notifyTypes(PAYLOAD_NOTIFICATIONS) { it.type == TileType.APP_SHORTCUT || it.type == TileType.FOLDER }
+    private val lastCounts = HashMap<String, Int>()
+    /** Tiles that just got a new notification flip straight away instead of waiting their turn. */
+    private val pulsePending = HashSet<String>()
+
+    fun onNotificationsChanged() {
+        tiles.filter { it.type == TileType.APP_SHORTCUT && it.shortcutId == null }.forEach { tile ->
+            val pkg = tile.packageName ?: return@forEach
+            val count = NotificationHub.get(pkg)?.count ?: 0
+            if (count > (lastCounts[pkg] ?: count)) pulsePending.add(tile.id)
+            lastCounts[pkg] = count
+        }
+        notifyTypes(PAYLOAD_NOTIFICATIONS) { it.type == TileType.APP_SHORTCUT || it.type == TileType.FOLDER }
+    }
 
     fun onMediaChanged() = notifyTypes(PAYLOAD_MEDIA) { it.type == TileType.MEDIA_PLAYER }
 
@@ -439,8 +451,8 @@ class MetroTileAdapter(
         val tile = itemAt(position)
         holder.tile = tile
         if (PAYLOAD_RESTYLE in payloads) {
+            // MetroItemAnimator animates the change (smooth resize, or a pop for recolours).
             onBindViewHolder(holder, position)
-            MetroMotion.pop(holder.surface)
             return
         }
         if (PAYLOAD_ICONS in payloads) {
@@ -452,6 +464,10 @@ class MetroTileAdapter(
         if (payloads.any { it == PAYLOAD_TICK || it == PAYLOAD_NOTIFICATIONS || it == PAYLOAD_MEDIA }) {
             holder.bindContent(tile)
             if (holder.showingBack && !holder.hasBack(tile)) holder.resetFaces()
+            if (pulsePending.remove(tile.id) && !editMode && prefs.liveTilesEnabled && tile.liveEnabled && holder.hasBack(tile)) {
+                val now = SystemClock.uptimeMillis()
+                if (!holder.showingBack) holder.root.post { holder.toggleFace(now) } else holder.lastLiveAt = now
+            }
         }
     }
 
@@ -591,7 +607,8 @@ class MetroTileAdapter(
             val tile = holder.tile ?: return@setOnClickListener
             if (editMode) select(tile.id) else callbacks.onTileClick(tile, root)
         }
-        (root as TileRootLayout).onLongPress = {
+        (root as TileRootLayout).touchTargets = { listOf(holder.btnUnpin, holder.btnResize, holder.btnMore) }
+        root.onLongPress = {
             holder.tile?.let { tile ->
                 MetroMotion.releaseTilt(frame)
                 if (editMode) select(tile.id) else enterEditMode(tile.id)
@@ -603,6 +620,9 @@ class MetroTileAdapter(
         holder.btnResize.setOnClickListener {
             holder.tile?.let {
                 it.size = it.size.nextInCycle()
+                // The user chose this size; auto-grow leaves it alone from now on.
+                it.sizeLocked = true
+                holder.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 callbacks.onTileResized(it)
             }
         }
@@ -634,8 +654,9 @@ class MetroTileAdapter(
             elevation = 4 * density
             visibility = View.GONE
             val size = (30 * density).toInt()
+            // Half over the tile corner, like W10M, so they don't cover the tile's label.
             parent.addView(this, FrameLayout.LayoutParams(size, size, gravity).apply {
-                val m = (3 * density).toInt()
+                val m = (-8 * density).toInt()
                 setMargins(m, m, m, m)
             })
         }
@@ -985,10 +1006,9 @@ class MetroTileAdapter(
     }
 
     inner class BatteryHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val glyph: BatteryGlyph = surface.findViewById(R.id.v_battery_glyph)
         private val percent: TextView = surface.findViewById(R.id.tv_battery_percent)
-        private val bar: ProgressBar = surface.findViewById(R.id.pb_battery_level)
         private val label: TextView = surface.findViewById(R.id.tv_battery_label)
-        private val iconView: ImageView = surface.findViewById(R.id.iv_battery_icon)
         private val backTitle: TextView = surface.findViewById(R.id.tv_battery_back_title)
         private val backDetail: TextView = surface.findViewById(R.id.tv_battery_back_detail)
 
@@ -1005,28 +1025,29 @@ class MetroTileAdapter(
                 } ?: 0
             val plugged = (status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
             val state = status?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            val small = tile.size == TileSize.SMALL
+            val h = tileHeightPx(tile)
 
+            glyph.charging = plugged
+            glyph.setLevel(level / 100f)
+            val glyphH = (h * if (small) 0.24f else 0.15f).toInt()
+            glyph.layoutParams = glyph.layoutParams.apply {
+                height = glyphH
+                width = (glyphH * 2.1f).toInt()
+            }
             percent.text = "$level%"
-            percent.sizePx(tileHeightPx(tile) * if (tile.size == TileSize.SMALL) 0.3f else 0.26f)
-            bar.progress = level
-            bar.show(tile.size != TileSize.SMALL)
-            label.show(tile.size != TileSize.SMALL && prefs.showLabels)
-            iconView.setImageResource(if (plugged) R.drawable.ic_m_bolt else R.drawable.ic_m_battery)
-            iconView.show(tile.size != TileSize.SMALL)
-
-            backTitle.text = when {
+            percent.sizePx(h * if (small) 0.28f else 0.26f)
+            val stateText = when {
                 state == BatteryManager.BATTERY_STATUS_FULL -> "Fully charged"
                 plugged -> "Charging"
                 level <= 15 -> "Battery low"
-                else -> "On battery"
+                else -> "Battery"
             }
+            label.text = stateText
+            label.show(!small && prefs.showLabels)
+
+            backTitle.text = if (stateText == "Battery") "On battery" else stateText
             val lines = ArrayList<String>()
-            status?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }?.let {
-                lines.add(String.format(Locale.getDefault(), "%.1f °C", it / 10f))
-            }
-            status?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)?.takeIf { it > 0 }?.let {
-                lines.add(String.format(Locale.getDefault(), "%.2f V", it / 1000f))
-            }
             if (plugged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val remaining = bm?.computeChargeTimeRemaining() ?: -1L
                 if (remaining > 0) {
@@ -1034,16 +1055,22 @@ class MetroTileAdapter(
                     lines.add(if (minutes >= 60) "Full in ${minutes / 60} h ${minutes % 60} min" else "Full in $minutes min")
                 }
             }
+            status?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }?.let {
+                lines.add(String.format(Locale.getDefault(), "%.1f °C", it / 10f))
+            }
+            status?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)?.takeIf { it > 0 }?.let {
+                lines.add(String.format(Locale.getDefault(), "%.2f V", it / 1000f))
+            }
             backDetail.text = lines.joinToString("\n")
         }
     }
 
     inner class DeviceHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val storageRing: RingGauge = surface.findViewById(R.id.v_storage_ring)
         private val storageMain: TextView = surface.findViewById(R.id.tv_storage_main)
-        private val storageBar: ProgressBar = surface.findViewById(R.id.pb_storage_bar)
         private val storageDetail: TextView = surface.findViewById(R.id.tv_storage_detail)
+        private val memoryRing: RingGauge = surface.findViewById(R.id.v_memory_ring)
         private val memoryMain: TextView = surface.findViewById(R.id.tv_memory_main)
-        private val memoryBar: ProgressBar = surface.findViewById(R.id.pb_memory_bar)
         private val memoryDetail: TextView = surface.findViewById(R.id.tv_memory_detail)
 
         override val peeks = true
@@ -1053,16 +1080,16 @@ class MetroTileAdapter(
         private fun gb(bytes: Long) = String.format(Locale.getDefault(), "%.1f GB", bytes / 1_073_741_824.0)
 
         override fun bindContent(tile: TileItem) {
-            val big = tile.size != TileSize.SMALL
-            val textPx = tileHeightPx(tile) * if (big) 0.24f else 0.3f
+            val small = tile.size == TileSize.SMALL
+            val textPx = tileHeightPx(tile) * if (small) 0.2f else 0.13f
             try {
                 val stat = StatFs(Environment.getDataDirectory().path)
                 val total = stat.totalBytes
                 val free = stat.availableBytes
-                val used = if (total > 0) ((total - free) * 100 / total).toInt() else 0
-                storageMain.text = "$used%"
-                storageBar.progress = used
-                storageDetail.text = if (big) "Storage · ${gb(free)} free" else "Storage"
+                val used = if (total > 0) (total - free).toFloat() / total else 0f
+                storageRing.setLevel(used)
+                storageMain.text = "${(used * 100).toInt()}%"
+                storageDetail.text = if (small) "" else "Storage · ${gb(free)} free"
             } catch (_: Exception) {
                 storageMain.text = "—"
                 storageDetail.text = "Storage"
@@ -1070,15 +1097,15 @@ class MetroTileAdapter(
             val am = context.getSystemService(ActivityManager::class.java)
             val mem = ActivityManager.MemoryInfo()
             am?.getMemoryInfo(mem)
-            val memUsed = if (mem.totalMem > 0) ((mem.totalMem - mem.availMem) * 100 / mem.totalMem).toInt() else 0
-            memoryMain.text = "$memUsed%"
-            memoryBar.progress = memUsed
+            val memUsed = if (mem.totalMem > 0) (mem.totalMem - mem.availMem).toFloat() / mem.totalMem else 0f
+            memoryRing.setLevel(memUsed)
+            memoryMain.text = "${(memUsed * 100).toInt()}%"
             memoryDetail.text = "Memory · ${gb(mem.availMem)} free"
 
             storageMain.sizePx(textPx)
             memoryMain.sizePx(textPx)
-            storageBar.show(big)
-            storageDetail.show(prefs.showLabels || !big)
+            storageDetail.show(!small && prefs.showLabels)
+            memoryDetail.show(!small && prefs.showLabels)
         }
     }
 

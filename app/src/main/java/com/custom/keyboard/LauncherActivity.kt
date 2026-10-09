@@ -17,6 +17,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -50,7 +51,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.doOnLayout
 import androidx.lifecycle.Lifecycle
-import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -67,6 +67,7 @@ import com.custom.keyboard.launcher.LauncherPagerAdapter
 import com.custom.keyboard.launcher.METRO_ACCENTS
 import com.custom.keyboard.launcher.MediaTileController
 import com.custom.keyboard.launcher.MetroGridLayoutManager
+import com.custom.keyboard.launcher.MetroItemAnimator
 import com.custom.keyboard.launcher.MetroMotion
 import com.custom.keyboard.launcher.MetroOverlay
 import com.custom.keyboard.launcher.MetroTileAdapter
@@ -115,6 +116,9 @@ class LauncherActivity : AppCompatActivity() {
     private lateinit var tvTitle: TextView
     private lateinit var btnTogglePage: ImageView
     private lateinit var editBar: View
+    private lateinit var undoBar: View
+    /** Clean-up of the last unpinned tile (widget id, pictures), run once Undo is no longer offered. */
+    private var pendingUndoExpiry: Runnable? = null
 
     private lateinit var searchPanel: LinearLayout
     private lateinit var searchBox: View
@@ -182,8 +186,18 @@ class LauncherActivity : AppCompatActivity() {
         }
     }
 
+    private var lastBatteryState = ""
     private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) = tileAdapter.onBatteryChanged()
+        override fun onReceive(context: Context?, intent: Intent?) {
+            // The system sends this very often (voltage, temperature); only redraw on real changes.
+            val state = intent?.let {
+                "${it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)}/${it.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)}/" +
+                    "${it.getIntExtra(BatteryManager.EXTRA_STATUS, 0)}/${it.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10}"
+            } ?: return
+            if (state == lastBatteryState) return
+            lastBatteryState = state
+            tileAdapter.onBatteryChanged()
+        }
     }
 
     private val packageReceiver = object : BroadcastReceiver() {
@@ -364,6 +378,7 @@ class LauncherActivity : AppCompatActivity() {
         tvTitle = findViewById(R.id.tv_metro_title)
         btnTogglePage = findViewById(R.id.btn_toggle_page)
         editBar = findViewById(R.id.ll_edit_bar)
+        undoBar = findViewById(R.id.ll_undo_bar)
         searchPanel = findViewById(R.id.panel_inbuilt_keyboard_search)
         searchBox = findViewById(R.id.ll_search_box)
         keyboardView = findViewById(R.id.inbuilt_custom_keyboard_view)
@@ -494,12 +509,14 @@ class LauncherActivity : AppCompatActivity() {
         rvTiles = rv
         rv.layoutManager = gridLayoutManager
         rv.adapter = tileAdapter
-        rv.itemAnimator = DefaultItemAnimator().apply {
-            moveDuration = 260
+        rv.itemAnimator = MetroItemAnimator { holder -> tileAdapter.motionView(rv, holder.itemView) }.apply {
+            moveDuration = 280
             changeDuration = 160
             addDuration = 220
             removeDuration = 160
         }
+        // Keep off-screen tiles around so scrolling back doesn't rebind them.
+        rv.setItemViewCacheSize(24)
         applyTilesPadding(rv)
 
         touchHelper = ItemTouchHelper(dragCallback).also { it.attachToRecyclerView(rv) }
@@ -766,16 +783,54 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun unpin(tile: TileItem) {
+        val index = tiles.indexOf(tile)
         tileAdapter.removeTile(tile)
-        when (tile.type) {
-            TileType.WIDGET -> widgets.delete(tile.appWidgetId)
-            TileType.PHOTOS, TileType.QUICK_CONTACT -> TileMedia.deleteTile(this, tile.id)
-            else -> Unit
-        }
         prefs.saveTiles(tiles)
         syncPinnedShortcuts(tile.packageName)
         drawerAdapter.notifyDataSetChanged()
         if (tiles.isEmpty()) tileAdapter.exitEditMode()
+        root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        offerUndo("Unpinned ${tile.title.ifEmpty { "tile" }}", onUndo = {
+            tileAdapter.insertTile(tile, index)
+            prefs.saveTiles(tiles)
+            syncPinnedShortcuts(tile.packageName)
+            drawerAdapter.notifyDataSetChanged()
+        }, onExpire = {
+            when (tile.type) {
+                TileType.WIDGET -> widgets.delete(tile.appWidgetId)
+                TileType.PHOTOS, TileType.QUICK_CONTACT -> TileMedia.deleteTile(this, tile.id)
+                else -> Unit
+            }
+        })
+    }
+
+    /** Shows the Undo bar for 4 s; [onExpire] runs when Undo is no longer possible. */
+    private fun offerUndo(message: String, onUndo: () -> Unit, onExpire: () -> Unit) {
+        pendingUndoExpiry?.let {
+            handler.removeCallbacks(it)
+            it.run()
+        }
+        val expire = Runnable {
+            pendingUndoExpiry = null
+            onExpire()
+            undoBar.animate().alpha(0f).translationY(ui.dp(24).toFloat()).setStartDelay(0).setDuration(180)
+                .withEndAction { undoBar.visibility = View.GONE }.start()
+        }
+        pendingUndoExpiry = expire
+        findViewById<TextView>(R.id.tv_undo_message).text = message
+        findViewById<View>(R.id.btn_undo).setOnClickListener {
+            if (pendingUndoExpiry !== expire) return@setOnClickListener
+            handler.removeCallbacks(expire)
+            pendingUndoExpiry = null
+            onUndo()
+            undoBar.animate().alpha(0f).setStartDelay(0).setDuration(150).withEndAction { undoBar.visibility = View.GONE }.start()
+        }
+        (undoBar.layoutParams as FrameLayout.LayoutParams).bottomMargin = systemInsets.bottom + ui.dp(84)
+        undoBar.visibility = View.VISIBLE
+        undoBar.alpha = 0f
+        undoBar.translationY = ui.dp(24).toFloat()
+        undoBar.animate().alpha(1f).translationY(0f).setStartDelay(0).setDuration(220).setInterpolator(DecelerateInterpolator(2f)).start()
+        handler.postDelayed(expire, 4000)
     }
 
     private fun removeTilesFor(packageName: String) {
@@ -1321,6 +1376,7 @@ class LauncherActivity : AppCompatActivity() {
             card.addView(ui.chips(sizes.map { it.label }, sizes.indexOf(tile.size)) { i ->
                 if (tile.size != sizes[i]) {
                     tile.size = sizes[i]
+                    tile.sizeLocked = true
                     restyle(tile)
                 }
             })

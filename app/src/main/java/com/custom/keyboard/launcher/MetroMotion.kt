@@ -96,6 +96,7 @@ object MetroMotion {
             v.animate()
                 .rotationY(TURNSTILE_ANGLE)
                 .alpha(0f)
+                .withLayer()
                 .setStartDelay(i * stagger)
                 .setDuration(190)
                 .setInterpolator(accelerate)
@@ -118,6 +119,7 @@ object MetroMotion {
             v.animate()
                 .rotationY(0f)
                 .alpha(1f)
+                .withLayer()
                 .setStartDelay(i * stagger)
                 .setDuration(340)
                 .setInterpolator(decelerate)
@@ -146,6 +148,7 @@ object MetroMotion {
         centerPivot(surface)
         surface.animate()
             .rotationX(90f)
+            .withLayer()
             .setStartDelay(0)
             .setDuration(210)
             .setInterpolator(accelerate)
@@ -154,6 +157,7 @@ object MetroMotion {
                 surface.rotationX = -90f
                 surface.animate().setStartDelay(0)
                     .rotationX(0f)
+                    .withLayer()
                     .setDuration(280)
                     .setInterpolator(decelerate)
                     .start()
@@ -169,15 +173,15 @@ object MetroMotion {
         if (toBack) {
             front.translationY = 0f
             back.translationY = h
-            front.animate().setStartDelay(0).translationY(-h).setDuration(520).setInterpolator(decelerate).start()
-            back.animate().setStartDelay(0).translationY(0f).setDuration(520).setInterpolator(decelerate)
+            front.animate().setStartDelay(0).translationY(-h).withLayer().setDuration(520).setInterpolator(decelerate).start()
+            back.animate().setStartDelay(0).translationY(0f).withLayer().setDuration(520).setInterpolator(decelerate)
                 .withEndAction { front.visibility = View.INVISIBLE }
                 .start()
         } else {
             front.translationY = -h
             back.translationY = 0f
-            front.animate().setStartDelay(0).translationY(0f).setDuration(520).setInterpolator(decelerate).start()
-            back.animate().setStartDelay(0).translationY(h).setDuration(520).setInterpolator(decelerate)
+            front.animate().setStartDelay(0).translationY(0f).withLayer().setDuration(520).setInterpolator(decelerate).start()
+            back.animate().setStartDelay(0).translationY(h).withLayer().setDuration(520).setInterpolator(decelerate)
                 .withEndAction { back.visibility = View.INVISIBLE }
                 .start()
         }

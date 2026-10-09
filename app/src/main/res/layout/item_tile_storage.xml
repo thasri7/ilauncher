@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Device tile: storage on the front, memory on the back (peeks). -->
+<!-- Device tile: storage ring on the front, memory ring on the back (slides up). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tile_surface"
     android:layout_width="match_parent"
@@ -12,35 +12,27 @@
         android:orientation="vertical"
         android:padding="8dp">
 
-        <ImageView
-            android:layout_width="22dp"
-            android:layout_height="22dp"
-            android:contentDescription="@null"
-            android:src="@drawable/ic_m_storage" />
-
-        <View
-            android:layout_width="1dp"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
-
-        <TextView
-            android:id="@+id/tv_storage_main"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="sans-serif-light"
-            android:includeFontPadding="false"
-            android:textColor="#FFFFFF"
-            android:textSize="32sp" />
-
-        <ProgressBar
-            android:id="@+id/pb_storage_bar"
-            style="?android:attr/progressBarStyleHorizontal"
+        <FrameLayout
+            android:id="@+id/fl_storage_ring"
             android:layout_width="match_parent"
-            android:layout_height="4dp"
-            android:layout_marginTop="4dp"
-            android:max="100"
-            android:progressBackgroundTint="#55FFFFFF"
-            android:progressTint="#FFFFFF" />
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <com.custom.keyboard.launcher.RingGauge
+                android:id="@+id/v_storage_ring"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/tv_storage_main"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:fontFamily="sans-serif-light"
+                android:includeFontPadding="false"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp" />
+        </FrameLayout>
 
         <TextView
             android:id="@+id/tv_storage_detail"
@@ -58,35 +50,26 @@
         android:padding="8dp"
         android:visibility="invisible">
 
-        <ImageView
-            android:layout_width="22dp"
-            android:layout_height="22dp"
-            android:contentDescription="@null"
-            android:src="@drawable/ic_m_apps" />
-
-        <View
-            android:layout_width="1dp"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
-
-        <TextView
-            android:id="@+id/tv_memory_main"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="sans-serif-light"
-            android:includeFontPadding="false"
-            android:textColor="#FFFFFF"
-            android:textSize="32sp" />
-
-        <ProgressBar
-            android:id="@+id/pb_memory_bar"
-            style="?android:attr/progressBarStyleHorizontal"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="4dp"
-            android:layout_marginTop="4dp"
-            android:max="100"
-            android:progressBackgroundTint="#55FFFFFF"
-            android:progressTint="#FFFFFF" />
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <com.custom.keyboard.launcher.RingGauge
+                android:id="@+id/v_memory_ring"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/tv_memory_main"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:fontFamily="sans-serif-light"
+                android:includeFontPadding="false"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp" />
+        </FrameLayout>
 
         <TextView
             android:id="@+id/tv_memory_detail"
