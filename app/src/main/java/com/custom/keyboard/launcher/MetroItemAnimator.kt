@@ -1,5 +1,6 @@
 package com.custom.keyboard.launcher
 
+import android.graphics.Rect
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import androidx.recyclerview.widget.DefaultItemAnimator
@@ -11,7 +12,11 @@ import androidx.recyclerview.widget.RecyclerView.ItemAnimator.ItemHolderInfo
  * resized tile morphs smoothly from its old bounds to the new ones, and a recoloured tile pops.
  * Animation runs on the tile's inner motion frame, which RecyclerView never touches.
  */
-class MetroItemAnimator(private val motionView: (RecyclerView.ViewHolder) -> View?) : DefaultItemAnimator() {
+class MetroItemAnimator(
+    private val motionView: (RecyclerView.ViewHolder) -> View?,
+    /** Where a drag-resize left the tile, if this change came from one. */
+    private val dragHint: (RecyclerView.ViewHolder) -> Rect? = { null }
+) : DefaultItemAnimator() {
 
     private class Info : ItemHolderInfo() {
         var restyle = false
@@ -42,8 +47,10 @@ class MetroItemAnimator(private val motionView: (RecyclerView.ViewHolder) -> Vie
         if (oldHolder !== newHolder || (preInfo as? Info)?.restyle != true || view == null) {
             return super.animateChange(oldHolder, newHolder, preInfo, postInfo)
         }
-        val oldW = preInfo.right - preInfo.left
-        val oldH = preInfo.bottom - preInfo.top
+        // After a drag-resize, morph from the stretched shape the finger left, not the old size.
+        val from = dragHint(newHolder) ?: Rect(preInfo.left, preInfo.top, preInfo.right, preInfo.bottom)
+        val oldW = from.width()
+        val oldH = from.height()
         val newW = postInfo.right - postInfo.left
         val newH = postInfo.bottom - postInfo.top
         dispatchChangeFinished(newHolder, true)
@@ -62,8 +69,8 @@ class MetroItemAnimator(private val motionView: (RecyclerView.ViewHolder) -> Vie
         // Resize: start drawn at the old bounds, then morph into the new ones.
         view.pivotX = 0f
         view.pivotY = 0f
-        view.translationX = (preInfo.left - postInfo.left).toFloat()
-        view.translationY = (preInfo.top - postInfo.top).toFloat()
+        view.translationX = (from.left - postInfo.left).toFloat()
+        view.translationY = (from.top - postInfo.top).toFloat()
         view.scaleX = restScale * oldW / newW
         view.scaleY = restScale * oldH / newH
         view.animate().setStartDelay(0)

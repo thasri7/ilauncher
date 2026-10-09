@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
@@ -669,47 +670,86 @@ class MetroTileAdapter(
             }
         }
         holder.btnUnpin.setOnClickListener { holder.tile?.let { callbacks.onTileUnpinned(it) } }
-        // Resize handle: a tap steps through the sizes (W10M); dragging it snaps the tile to the
-        // size under your finger, like resizing a widget on a modern home screen.
+        // Resize handle. A tap steps through the sizes (W10M). Dragging stretches the tile smoothly
+        // under your finger, with a faint outline of the size it will take; the size is only
+        // chosen when you let go, and the tile then glides into its new place.
         var startX = 0f
         var startY = 0f
         var resizing = false
-        val tileOrigin = IntArray(2)
+        var target: TileSize? = null
+        val origin = IntArray(2)
+        val gridRight = IntArray(2)
         holder.btnResize.setOnTouchListener { v, e ->
             val tile = holder.tile ?: return@setOnTouchListener false
+            val pitch = cellPitch()
+            val gutter = prefs.gutterDp * density
+            val allowed = allowedSizes(tile)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = e.rawX
                     startY = e.rawY
                     resizing = false
-                    holder.root.getLocationOnScreen(tileOrigin)
+                    target = null
+                    holder.root.getLocationOnScreen(origin)
+                    (holder.root.parent as? View)?.let { rv ->
+                        rv.getLocationOnScreen(gridRight)
+                        gridRight[0] += rv.width - rv.paddingRight
+                    }
                     v.parent?.requestDisallowInterceptTouchEvent(true)
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!resizing && hypot(e.rawX - startX, e.rawY - startY) > touchSlop) resizing = true
+                    if (!resizing && hypot(e.rawX - startX, e.rawY - startY) > touchSlop && pitch > 0f) {
+                        resizing = true
+                        holder.root.translationZ = 12 * density
+                        holder.ghost.visibility = View.VISIBLE
+                    }
                     if (resizing) {
-                        val pitch = cellPitch().takeIf { it > 0f } ?: return@setOnTouchListener true
-                        val cols = ceil((e.rawX - tileOrigin[0]) / pitch).toInt().coerceAtLeast(1)
-                        val rows = ceil((e.rawY - tileOrigin[1]) / pitch).toInt().coerceAtLeast(1)
-                        val wanted = snapSize(cols, rows, allowedSizes(tile))
-                        if (wanted != tile.size) {
-                            tile.size = wanted
-                            tile.sizeLocked = true
+                        val minW = (allowed.minOf { it.cols } * pitch - gutter)
+                        val minH = (allowed.minOf { it.rows } * pitch - gutter)
+                        val maxW = minOf(allowed.maxOf { it.cols } * pitch - gutter, (gridRight[0] - origin[0]).toFloat())
+                        val maxH = allowed.maxOf { it.rows } * pitch - gutter
+                        val w = (e.rawX - origin[0]).coerceIn(minW, maxOf(minW, maxW))
+                        val h = (e.rawY - origin[1]).coerceIn(minH, maxOf(minH, maxH))
+                        // Size just this tile directly; a layout request would re-lay the whole grid each frame.
+                        sizeDirectly(holder.frame, w.toInt(), h.toInt())
+                        val snapped = snapSize(Math.round((w + gutter) / pitch), Math.round((h + gutter) / pitch), allowed)
+                        if (snapped != target) {
+                            target = snapped
+                            sizeDirectly(holder.ghost, (snapped.cols * pitch - gutter).toInt(), (snapped.rows * pitch - gutter).toInt())
                             v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                            callbacks.onTileResized(tile)
                         }
                     }
                 }
-                MotionEvent.ACTION_UP -> if (!resizing) {
-                    val allowed = allowedSizes(tile)
-                    var next = tile.size.nextInCycle()
-                    repeat(4) { if (next !in allowed) next = next.nextInCycle() }
-                    if (next != tile.size) {
-                        tile.size = next
-                        // The user chose this size; auto-grow leaves it alone from now on.
-                        tile.sizeLocked = true
-                        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        callbacks.onTileResized(tile)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (resizing) {
+                        // Hand the stretched bounds to the item animator so it morphs from there.
+                        dragResizeHint = tile.id to Rect(
+                            holder.root.left, holder.root.top,
+                            holder.root.left + holder.frame.width, holder.root.top + holder.frame.height
+                        )
+                        holder.frame.requestLayout()
+                        holder.ghost.visibility = View.GONE
+                        holder.root.translationZ = 0f
+                        val chosen = target
+                        if (chosen != null && chosen != tile.size && e.actionMasked == MotionEvent.ACTION_UP) {
+                            tile.size = chosen
+                            tile.sizeLocked = true
+                            callbacks.onTileResized(tile)
+                        } else {
+                            // Same size: let the tile settle back from its stretched shape.
+                            notifyItemChanged(bindingAdapterPositionOf(holder), PAYLOAD_RESTYLE)
+                        }
+                        resizing = false
+                    } else if (e.actionMasked == MotionEvent.ACTION_UP) {
+                        var next = tile.size.nextInCycle()
+                        repeat(4) { if (next !in allowed) next = next.nextInCycle() }
+                        if (next != tile.size) {
+                            tile.size = next
+                            // The user chose this size; auto-grow leaves it alone from now on.
+                            tile.sizeLocked = true
+                            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            callbacks.onTileResized(tile)
+                        }
                     }
                 }
             }
@@ -717,6 +757,23 @@ class MetroTileAdapter(
         }
         holder.btnMore.setOnClickListener { holder.tile?.let { callbacks.onTileMenu(it, root) } }
     }
+
+    /** Bounds a drag-resize ended at (tile id → rect in RecyclerView coordinates), consumed by the animator. */
+    private var dragResizeHint: Pair<String, Rect>? = null
+
+    fun takeDragResizeHint(holder: RecyclerView.ViewHolder): Rect? {
+        val id = (holder as? TileHolder)?.tile?.id ?: return null
+        val hint = dragResizeHint?.takeIf { it.first == id } ?: return null
+        dragResizeHint = null
+        return hint.second
+    }
+
+    private fun sizeDirectly(v: View, w: Int, h: Int) {
+        v.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+        v.layout(0, 0, w, h)
+    }
+
+    private fun bindingAdapterPositionOf(holder: RecyclerView.ViewHolder) = holder.bindingAdapterPosition.coerceAtLeast(0)
 
     /** Sizes a tile may take: widgets are limited to what they support. */
     fun allowedSizes(tile: TileItem): List<TileSize> = when (tile.type) {
@@ -807,6 +864,16 @@ class MetroTileAdapter(
         val back: View? = surface.findViewById(R.id.face_back)
         var showingBack = false
         var lastLiveAt = 0L
+        /** Outline of the size a drag-resize will end at. */
+        val ghost: View = View(context).apply {
+            background = GradientDrawable().apply {
+                setColor(0x1AFFFFFF)
+                setStroke((2 * density).toInt(), 0xB3FFFFFF.toInt(), 8 * density, 5 * density)
+                cornerRadius = prefs.cornerRadiusDp * density
+            }
+            visibility = View.GONE
+            root.addView(this, FrameLayout.LayoutParams(0, 0))
+        }
         val btnUnpin = editButton(frame, R.drawable.ic_m_unpin, Gravity.TOP or Gravity.END, "Unpin")
         val btnResize = editButton(frame, R.drawable.ic_m_resize, Gravity.BOTTOM or Gravity.END, "Resize")
         // Top-left, so it never covers the label in the bottom-left corner.

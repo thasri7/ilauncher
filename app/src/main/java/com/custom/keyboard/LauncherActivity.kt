@@ -563,7 +563,10 @@ class LauncherActivity : AppCompatActivity() {
         rvTiles = rv
         rv.layoutManager = gridLayoutManager
         rv.adapter = tileAdapter
-        rv.itemAnimator = MetroItemAnimator { holder -> tileAdapter.motionView(rv, holder.itemView) }.apply {
+        rv.itemAnimator = MetroItemAnimator(
+            motionView = { holder -> tileAdapter.motionView(rv, holder.itemView) },
+            dragHint = { holder -> tileAdapter.takeDragResizeHint(holder) }
+        ).apply {
             moveDuration = 280
             changeDuration = 160
             addDuration = 220
