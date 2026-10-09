@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">iKeyboard</string>
-    <string name="keyboard_service_name">iKeyboard</string>
+    <string name="app_name">iLauncher</string>
+    <string name="keyboard_service_name">iLauncher Keyboard</string>
+    <string name="keyboard_settings_name">Keyboard settings</string>
     <string name="subtype_en_us">English (US)</string>
     <string name="step_1_enable">1. Enable in Settings</string>
     <string name="step_2_select">2. Switch Active Keyboard</string>
