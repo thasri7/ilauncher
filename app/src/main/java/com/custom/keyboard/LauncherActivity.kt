@@ -3,7 +3,9 @@ package com.custom.keyboard
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ActivityOptions
+import android.app.KeyguardManager
 import android.app.SearchManager
+import android.app.WallpaperManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
@@ -16,9 +18,13 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.provider.AlarmClock
@@ -26,6 +32,7 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.text.format.DateUtils
 import android.text.format.DateFormat
 import android.view.GestureDetector
 import android.view.Gravity
@@ -60,6 +67,7 @@ import com.custom.keyboard.launcher.AppDrawerAdapter
 import com.custom.keyboard.launcher.AppSearch
 import com.custom.keyboard.launcher.AppShortcuts
 import com.custom.keyboard.launcher.GestureActions
+import com.custom.keyboard.launcher.GlanceActivity
 import com.custom.keyboard.launcher.IconCache
 import com.custom.keyboard.launcher.IconPacks
 import com.custom.keyboard.launcher.LauncherKeyboardController
@@ -76,6 +84,7 @@ import com.custom.keyboard.launcher.NotificationHub
 import com.custom.keyboard.launcher.PageTransformers
 import com.custom.keyboard.launcher.SettingsPage
 import com.custom.keyboard.launcher.StartBackdrop
+import com.custom.keyboard.launcher.Suggestions
 import com.custom.keyboard.launcher.TileMedia
 import com.custom.keyboard.launcher.TilePreferences
 import com.custom.keyboard.launcher.WeatherCodes
@@ -130,6 +139,10 @@ class LauncherActivity : AppCompatActivity() {
     private lateinit var searchActionStrip: View
 
     private var rvTiles: RecyclerView? = null
+    private var suggestionsStrip: View? = null
+    private var suggestionsShownFor = ""
+    /** The phone was just unlocked: play the "your day" entrance. */
+    private var dayEntrance = false
     private var rvDrawer: RecyclerView? = null
     private var etDrawerSearch: EditText? = null
     private var touchHelper: ItemTouchHelper? = null
@@ -183,6 +196,7 @@ class LauncherActivity : AppCompatActivity() {
             tileAdapter.tick()
             refreshAgenda()
             refreshWeather(force = false)
+            refreshSuggestions()
         }
     }
 
@@ -216,6 +230,23 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private val notificationsChanged: () -> Unit = { tileAdapter.onNotificationsChanged() }
+
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            dayEntrance = true
+            playEntrance = true
+        }
+    }
+
+    private val wallpaperColorsListener: Any? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        WallpaperManager.OnColorsChangedListener { _, which ->
+            if (which and WallpaperManager.FLAG_SYSTEM != 0) applyWallpaperAccent()
+        }
+    } else null
+
+    private val privateUnlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) showPrivateApps()
+    }
 
     // ── Activity results ────────────────────────────────────────────────────────────────
 
@@ -365,6 +396,13 @@ class LauncherActivity : AppCompatActivity() {
             addDataScheme("package")
         }
         ContextCompat.registerReceiver(this, packageReceiver, packageFilter, ContextCompat.RECEIVER_EXPORTED)
+        ContextCompat.registerReceiver(this, userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_EXPORTED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            (wallpaperColorsListener as? WallpaperManager.OnColorsChangedListener)?.let {
+                WallpaperManager.getInstance(this).addOnColorsChangedListener(it, handler)
+            }
+        }
+        applyWallpaperAccent()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = goBack(homePressed = false)
@@ -434,7 +472,8 @@ class LauncherActivity : AppCompatActivity() {
             isPinned = { pkg -> pkg in allPinnedPackages() },
             onAppClick = { app, view -> launchApp(app.packageName, view) },
             onAppLongClick = { app, view -> showDrawerAppMenu(app, view) },
-            onHeaderClick = { showJumpList() }
+            onHeaderClick = { showJumpList() },
+            onPrivateClick = { unlockPrivateApps() }
         )
         searchAdapter = AppDrawerAdapter(
             icons = icons,
@@ -450,6 +489,12 @@ class LauncherActivity : AppCompatActivity() {
         val rvSearch = findViewById<RecyclerView>(R.id.rv_search_results)
         rvSearch.layoutManager = LinearLayoutManager(this)
         rvSearch.adapter = searchAdapter
+    }
+
+    /** Apps shown in All apps, search and pickers: everything except Private apps. */
+    private fun visibleApps(): List<AppLauncherHelper.AppEntry> {
+        val hidden = prefs.hiddenApps
+        return if (hidden.isEmpty()) allApps else allApps.filter { it.packageName !in hidden }
     }
 
     private fun allPinnedPackages(): Set<String> =
@@ -517,7 +562,15 @@ class LauncherActivity : AppCompatActivity() {
         }
         // Keep off-screen tiles around so scrolling back doesn't rebind them.
         rv.setItemViewCacheSize(24)
+        suggestionsStrip = (rv.parent as? View)?.findViewById(R.id.ll_suggestions)
         applyTilesPadding(rv)
+        // The suggestions strip scrolls away with the first rows of tiles.
+        rv.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                suggestionsStrip?.translationY = -recyclerView.computeVerticalScrollOffset().toFloat()
+            }
+        })
+        rv.post { refreshSuggestions() }
 
         touchHelper = ItemTouchHelper(dragCallback).also { it.attachToRecyclerView(rv) }
 
@@ -567,7 +620,66 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun applyTilesPadding(rv: RecyclerView) {
         val side = ui.dp(8)
-        rv.setPadding(side + systemInsets.left, ui.dp(4), side + systemInsets.right, systemInsets.bottom + ui.dp(96))
+        val strip = suggestionsStrip?.takeIf { it.visibility == View.VISIBLE }
+        val top = if (strip != null) strip.measuredHeight.takeIf { it > 0 } ?: ui.dp(88) else ui.dp(4)
+        rv.setPadding(side + systemInsets.left, top, side + systemInsets.right, systemInsets.bottom + ui.dp(96))
+    }
+
+    /** "Suggested now": apps you usually open around this hour, as small tiles above Start. */
+    private fun refreshSuggestions(force: Boolean = false) {
+        val strip = suggestionsStrip ?: return
+        val rv = rvTiles ?: return
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val columns = prefs.columns
+        val apps = if (prefs.suggestionsEnabled && !tileAdapter.editMode) {
+            Suggestions.forHour(prefs.hourlyUsage(), hour, columns, prefs.hiddenApps)
+                .mapNotNull { pkg -> allApps.firstOrNull { it.packageName == pkg } }
+        } else emptyList()
+        val key = "$hour/${apps.joinToString { it.packageName }}/${prefs.accentColor}/${prefs.gutterDp}/$columns/${prefs.cornerRadiusDp}"
+        if (!force && key == suggestionsShownFor) return
+        suggestionsShownFor = key
+        val row = strip.findViewById<LinearLayout>(R.id.ll_suggestions_row)
+        row.removeAllViews()
+        if (apps.size < 2) {
+            strip.visibility = View.GONE
+            applyTilesPadding(rv)
+            return
+        }
+        strip.findViewById<TextView>(R.id.tv_suggestions_title).text = "suggested · ${Suggestions.partOfDay(hour)}"
+        val pitch = gridLayoutManager.cellPitch.takeIf { it > 0f } ?: (rv.width - ui.dp(16)) / columns.toFloat()
+        val gutter = ui.dp(prefs.gutterDp)
+        val size = (pitch - gutter).toInt()
+        apps.forEachIndexed { i, app ->
+            val cell = FrameLayout(this).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(prefs.tileOpacity.coerceIn(20, 100) * 255 / 100, Color.red(prefs.accentColorInt), Color.green(prefs.accentColorInt), Color.blue(prefs.accentColorInt)))
+                    cornerRadius = prefs.cornerRadiusDp * resources.displayMetrics.density
+                }
+                clipToOutline = prefs.cornerRadiusDp > 0
+                contentDescription = app.name
+            }
+            val icon = ImageView(this)
+            cell.addView(icon, FrameLayout.LayoutParams((size * 0.56f).toInt(), (size * 0.56f).toInt(), Gravity.CENTER))
+            icons.iconAsync(app.packageName, prefs.themedIcons) { d, _ -> icon.setImageDrawable(d) }
+            cell.setOnTouchListener { v, e ->
+                if (prefs.tiltEnabled) when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> MetroMotion.tiltTo(v, e.x, e.y)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> MetroMotion.releaseTilt(v)
+                }
+                false
+            }
+            cell.setOnClickListener { launchApp(app.packageName, null) }
+            cell.setOnLongClickListener {
+                showDrawerAppMenu(app, cell)
+                true
+            }
+            row.addView(cell, LinearLayout.LayoutParams(size, size).apply { if (i > 0) marginStart = gutter })
+        }
+        val wasHidden = strip.visibility != View.VISIBLE
+        strip.visibility = View.VISIBLE
+        strip.translationY = -rv.computeVerticalScrollOffset().toFloat()
+        strip.post { applyTilesPadding(rv) }
+        if (wasHidden && prefs.animationsEnabled) MetroMotion.cascadeIn((0 until row.childCount).map { row.getChildAt(it) }, ui.dp(32).toFloat())
     }
 
     private fun setupDrawerPage(page: View) {
@@ -596,7 +708,8 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun refreshDrawer() {
         if (drawerQuery.isEmpty()) {
-            drawerAdapter.submit(allApps, grouped = true, mostUsed = mostUsedApps(4))
+            val hiddenCount = prefs.hiddenApps.count { pkg -> allApps.any { it.packageName == pkg } }
+            drawerAdapter.submit(visibleApps(), grouped = true, mostUsed = mostUsedApps(4), privateCount = hiddenCount)
         } else {
             drawerAdapter.submit(rankApps(drawerQuery), grouped = false)
         }
@@ -627,6 +740,7 @@ class LauncherActivity : AppCompatActivity() {
 
         override fun onEditModeChanged(editing: Boolean) {
             pager.isUserInputEnabled = !editing
+            refreshSuggestions()
             if (editing) root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             showEditBar(editing)
         }
@@ -634,6 +748,8 @@ class LauncherActivity : AppCompatActivity() {
         override fun onFolderAppClick(app: TileItem, view: View) = openAppTile(app, view)
 
         override fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View) = showFolderAppMenu(folder, app, anchor)
+
+        override fun onTileSwipe(tile: TileItem) = showTileNotifications(tile)
     }
 
     private val dragCallback = object : ItemTouchHelper.Callback() {
@@ -1000,7 +1116,17 @@ class LauncherActivity : AppCompatActivity() {
             MetroMotion.resetTiles(rv, motionView)
             return
         }
-        rv.doOnLayout { MetroMotion.turnstileIn(rv, motionView) }
+        val yourDay = dayEntrance
+        dayEntrance = false
+        rv.doOnLayout {
+            if (yourDay) {
+                // Unlocked: today's info and unread tiles arrive first, then unread tiles flip.
+                MetroMotion.turnstileIn(rv, motionView) { child -> tileAdapter.priorityOf(rv, child) }
+                if (prefs.liveTilesEnabled) rv.postDelayed({ tileAdapter.pulseUnread() }, 650)
+            } else {
+                MetroMotion.turnstileIn(rv, motionView)
+            }
+        }
     }
 
     private fun webSearch(query: String) {
@@ -1197,8 +1323,140 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun runDoubleTapGesture() {
-        if (prefs.doubleTapAction != "lock") return
-        if (!GestureActions.lockScreen()) promptGestureHelper("lock the screen")
+        when (prefs.doubleTapAction) {
+            "lock" -> if (!GestureActions.lockScreen()) promptGestureHelper("lock the screen")
+            "glance" -> {
+                startActivity(Intent(this, GlanceActivity::class.java))
+                @Suppress("DEPRECATION")
+                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            }
+        }
+    }
+
+    // ── Accent from wallpaper ───────────────────────────────────────────────────────────
+
+    /** Picks the accent from the wallpaper's main colour, adjusted so white text stays readable. */
+    private fun applyWallpaperAccent() {
+        if (!prefs.accentFromWallpaper || Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return
+        val colors = try {
+            WallpaperManager.getInstance(this).getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val candidates = listOfNotNull(colors.primaryColor, colors.secondaryColor, colors.tertiaryColor).map { it.toArgb() }
+        val hsv = FloatArray(3)
+        // Prefer the most colourful of the wallpaper's main colours.
+        val best = candidates.maxByOrNull { Color.colorToHSV(it, hsv); hsv[1] * (0.3f + hsv[2]) } ?: return
+        Color.colorToHSV(best, hsv)
+        hsv[1] = if (hsv[1] < 0.15f) hsv[1] else hsv[1].coerceIn(0.45f, 0.95f)
+        hsv[2] = hsv[2].coerceIn(0.35f, 0.72f)
+        val hex = String.format("#%06X", 0xFFFFFF and Color.HSVToColor(hsv))
+        if (hex != prefs.accentColor) {
+            prefs.accentColor = hex
+            if (::tileAdapter.isInitialized) applyLookAndFeel()
+        }
+    }
+
+    // ── Notifications for a tile ────────────────────────────────────────────────────────
+
+    private fun showTileNotifications(tile: TileItem) {
+        val packages = if (tile.type == TileType.FOLDER) tile.children.mapNotNull { it.packageName } else listOfNotNull(tile.packageName)
+        val items = packages.flatMap { pkg -> NotificationHub.get(pkg)?.items.orEmpty().map { pkg to it } }
+            .sortedByDescending { it.second.postTime }
+        if (items.isEmpty()) {
+            toast("No notifications")
+            return
+        }
+        val card = ui.card()
+        card.addView(ui.header(tile.title, "${items.size} notification${if (items.size == 1) "" else "s"}"))
+        items.forEach { (pkg, item) ->
+            val ago = DateUtils.getRelativeTimeSpanString(item.postTime, System.currentTimeMillis(), 60_000L).toString()
+            card.addView(ui.actionWithIcon(
+                icon = icons.icon(pkg),
+                title = item.title.ifEmpty { tile.title },
+                subtitle = listOf(item.text, ago).filter { it.isNotEmpty() }.joinToString(" · "),
+                trailingIcon = if (item.clearable) R.drawable.ic_m_close else null,
+                trailingDescription = "Dismiss",
+                onTrailing = {
+                    NotificationHub.dismiss(listOf(item.key))
+                    metroOverlay.dismiss()
+                }
+            ) {
+                metroOverlay.dismiss()
+                try {
+                    item.contentIntent?.send() ?: launchApp(pkg, null)
+                } catch (_: Exception) {
+                    launchApp(pkg, null)
+                }
+            })
+        }
+        if (items.any { it.second.clearable }) {
+            card.addView(ui.divider())
+            card.addView(ui.action(R.drawable.ic_m_delete, "Clear all") {
+                NotificationHub.dismiss(items.filter { it.second.clearable }.map { it.second.key })
+                metroOverlay.dismiss()
+            })
+        }
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    // ── Private apps ────────────────────────────────────────────────────────────────────
+
+    private fun setHidden(packageName: String, hidden: Boolean) {
+        prefs.hiddenApps = if (hidden) prefs.hiddenApps + packageName else prefs.hiddenApps - packageName
+        refreshDrawer()
+        refreshSuggestions(force = true)
+        toast(if (hidden) "Moved to Private apps" else "Back in All apps")
+    }
+
+    /** Asks for the phone's fingerprint, face or PIN before showing Private apps. */
+    private fun unlockPrivateApps() {
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isDeviceSecure) {
+            showPrivateApps()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val prompt = BiometricPrompt.Builder(this)
+                .setTitle("Private apps")
+                .setSubtitle("Confirm it's you")
+                .setAllowedAuthenticators(
+                    BiometricManager.Authenticators.BIOMETRIC_WEAK or
+                        BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                )
+                .build()
+            prompt.authenticate(CancellationSignal(), mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) = showPrivateApps()
+            })
+        } else {
+            @Suppress("DEPRECATION")
+            val intent = keyguard.createConfirmDeviceCredentialIntent("Private apps", "Confirm it's you")
+            if (intent != null) privateUnlock.launch(intent) else showPrivateApps()
+        }
+    }
+
+    private fun showPrivateApps() {
+        val hidden = prefs.hiddenApps
+        val apps = allApps.filter { it.packageName in hidden }
+        val card = ui.card()
+        card.addView(ui.header("Private apps", "Hidden from All apps and search"))
+        if (apps.isEmpty()) card.addView(ui.caption("Nothing here. Long-press an app in All apps and choose Move to Private apps."))
+        apps.forEach { app ->
+            card.addView(ui.actionWithIcon(
+                icon = icons.icon(app.packageName),
+                title = app.name,
+                trailingIcon = R.drawable.ic_m_move_out,
+                trailingDescription = "Show in All apps",
+                onTrailing = {
+                    metroOverlay.dismiss()
+                    setHidden(app.packageName, hidden = false)
+                }
+            ) {
+                metroOverlay.dismiss()
+                launchApp(app.packageName, null)
+            })
+        }
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
     }
 
     private fun promptGestureHelper(what: String) {
@@ -1289,16 +1547,16 @@ class LauncherActivity : AppCompatActivity() {
         tvWebSearchLabel.text = "Search the web for “$clean”"
         searchActionStrip.visibility = if (math != null || clean.isNotEmpty()) View.VISIBLE else View.GONE
 
-        searchResults = if (clean.isEmpty()) mostUsedApps(8).ifEmpty { allApps.take(8) } else rankApps(clean)
+        searchResults = if (clean.isEmpty()) mostUsedApps(8).ifEmpty { visibleApps().take(8) } else rankApps(clean)
         searchAdapter.submit(searchResults, grouped = false)
     }
 
     private fun rankApps(query: String): List<AppLauncherHelper.AppEntry> =
-        AppSearch.rank(allApps, query, appHelper.findMatchingApp(query.trim().lowercase()))
+        AppSearch.rank(visibleApps(), query, appHelper.findMatchingApp(query.trim().lowercase())?.takeIf { it.packageName !in prefs.hiddenApps })
 
     private fun mostUsedApps(count: Int): List<AppLauncherHelper.AppEntry> {
         val usage = prefs.usageCounts()
-        return allApps.filter { (usage[it.packageName] ?: 0) > 0 }
+        return visibleApps().filter { (usage[it.packageName] ?: 0) > 0 }
             .sortedByDescending { usage[it.packageName] ?: 0 }
             .take(count)
     }
@@ -1409,6 +1667,14 @@ class LauncherActivity : AppCompatActivity() {
             card.addView(ui.toggleRow("Live tile", "Flip to show live info", tile.liveEnabled) { on ->
                 tile.liveEnabled = on
                 restyle(tile)
+            })
+        }
+        val unread = (if (tile.type == TileType.FOLDER) tile.children.mapNotNull { it.packageName } else listOfNotNull(tile.packageName))
+            .sumOf { NotificationHub.get(it)?.count ?: 0 }
+        if (unread > 0) {
+            card.addView(ui.action(R.drawable.ic_m_notifications, "Notifications ($unread)", "Tip: swipe across the tile") {
+                metroOverlay.dismiss()
+                showTileNotifications(tile)
             })
         }
         when (tile.type) {
@@ -1524,6 +1790,11 @@ class LauncherActivity : AppCompatActivity() {
                 pinned.forEach { unpin(it) }
             })
         }
+        val isHidden = app.packageName in prefs.hiddenApps
+        card.addView(ui.action(R.drawable.ic_m_lock, if (isHidden) "Show in All apps" else "Move to Private apps") {
+            metroOverlay.dismiss()
+            setHidden(app.packageName, hidden = !isHidden)
+        })
         card.addView(ui.action(R.drawable.ic_m_info, "App info") { metroOverlay.dismiss(); openAppInfo(app.packageName) })
         card.addView(ui.action(R.drawable.ic_m_delete, "Uninstall", danger = true) { metroOverlay.dismiss(); uninstall(app.packageName) })
         metroOverlay.show(scrollableSheet(card), if (shortcuts.isAvailable) MetroOverlay.Style.SHEET else MetroOverlay.Style.POPUP, anchor)
@@ -1599,13 +1870,13 @@ class LauncherActivity : AppCompatActivity() {
             adapter = picker
         }
         card.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.55f).toInt()))
-        picker.submit(allApps, grouped = false)
+        picker.submit(visibleApps(), grouped = false)
         filter.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val q = s?.toString().orEmpty()
-                picker.submit(if (q.isBlank()) allApps else rankApps(q), grouped = false)
+                picker.submit(if (q.isBlank()) visibleApps() else rankApps(q), grouped = false)
             }
         })
         metroOverlay.show(card, MetroOverlay.Style.SHEET) { hideKeyboard(filter) }
@@ -1747,6 +2018,9 @@ class LauncherActivity : AppCompatActivity() {
         override fun importBackup() = backupReader.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
         override fun confirmReset() = this@LauncherActivity.confirmReset()
         override fun showWeatherSetup() = this@LauncherActivity.showWeatherSetup()
+        override fun applyWallpaperAccent() = this@LauncherActivity.applyWallpaperAccent()
+        override fun showPrivateApps() = unlockPrivateApps()
+        override val privateAppCount: Int get() = prefs.hiddenApps.size
         override fun setWeatherUnit(unit: String) {
             prefs.weatherUnit = unit
             refreshWeather(force = true)
@@ -1920,6 +2194,7 @@ class LauncherActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.iv_search_glyph).imageTintList = ColorStateList.valueOf(prefs.accentColorInt)
         tileAdapter.notifyDataSetChanged()
         drawerAdapter.notifyDataSetChanged()
+        refreshSuggestions(force = true)
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────────────────
@@ -1945,6 +2220,8 @@ class LauncherActivity : AppCompatActivity() {
         tileAdapter.onMediaChanged()
         refreshAgenda()
         refreshWeather(force = false)
+        refreshSuggestions()
+        applyWallpaperAccent()
         prefs.takePendingPins().forEach { pinShortcut(it.packageName, it.shortcutId, it.label) }
         if (pendingRestyles.isNotEmpty()) {
             tiles.filter { it.id in pendingRestyles }.forEach { tileAdapter.refresh(it) }
@@ -1979,7 +2256,13 @@ class LauncherActivity : AppCompatActivity() {
         media.stop()
         try {
             unregisterReceiver(packageReceiver)
+            unregisterReceiver(userPresentReceiver)
         } catch (_: Exception) {
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            (wallpaperColorsListener as? WallpaperManager.OnColorsChangedListener)?.let {
+                WallpaperManager.getInstance(this).removeOnColorsChangedListener(it)
+            }
         }
     }
 

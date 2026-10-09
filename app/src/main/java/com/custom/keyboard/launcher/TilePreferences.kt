@@ -8,6 +8,7 @@ import com.custom.keyboard.models.TileSize
 import com.custom.keyboard.models.TileType
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 import java.util.Locale
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
@@ -27,6 +28,8 @@ class TilePreferences(context: Context) {
     /** "wallpaper": tiles float over the system wallpaper; "picture": a picture shows only through the tiles. */
     var backgroundMode by stringPref("background_mode", "wallpaper")
     var accentColor by stringPref("accent_color", "#0050EF")
+    /** Take the accent from the wallpaper's main colour (Android 8.1+). */
+    var accentFromWallpaper by boolPref("accent_from_wallpaper", false)
     /** "accent" paints every tile with the accent, "icon" derives each app tile's colour from its icon. */
     var tileColorMode by stringPref("tile_color_mode", "accent")
     var themedIcons by boolPref("themed_icons", true)
@@ -44,7 +47,7 @@ class TilePreferences(context: Context) {
     // ── Gestures ─────────────────────────────────────────────────────────────────────────
     /** Swipe down at the top of Start: "notifications", "search" or "none". */
     var swipeDownAction by stringPref("gesture_swipe_down", "notifications")
-    /** Double-tap on empty Start space: "lock" or "none". */
+    /** Double-tap on empty Start space: "lock", "glance" or "none". */
     var doubleTapAction by stringPref("gesture_double_tap", "lock")
 
     // ── Weather ──────────────────────────────────────────────────────────────────────────
@@ -58,6 +61,8 @@ class TilePreferences(context: Context) {
     var weatherCache by stringPref("weather_cache", "")
 
     // ── Behaviour ────────────────────────────────────────────────────────────────────────
+    /** "Suggested now" strip at the top of Start. */
+    var suggestionsEnabled by boolPref("suggestions_enabled", true)
     var autoGrowEnabled by boolPref("auto_grow_enabled", true)
     /** Set once the first-run app tiles were added, so unpinning them all doesn't bring them back. */
     var appsSeeded by boolPref("apps_seeded", false)
@@ -152,6 +157,35 @@ class TilePreferences(context: Context) {
         }
     }
 
+    /** Packages hidden from All apps and search; shown only in Private apps after unlocking. */
+    var hiddenApps: Set<String>
+        get() = prefs.getStringSet("hidden_apps", emptySet())?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet("hidden_apps", value).apply()
+
+    /** Launches per app for each hour of the day (24 buckets), for "Suggested now". */
+    fun hourlyUsage(): Map<String, IntArray> {
+        val raw = prefs.getString("hourly_usage_json", null) ?: return emptyMap()
+        return try {
+            val obj = JSONObject(raw)
+            obj.keys().asSequence().associateWith { key ->
+                val arr = obj.getJSONArray(key)
+                IntArray(24) { arr.optInt(it) }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun recordHour(packageName: String, hour: Int) {
+        val usage = hourlyUsage().toMutableMap()
+        val buckets = usage[packageName] ?: IntArray(24)
+        buckets[hour.coerceIn(0, 23)]++
+        usage[packageName] = buckets
+        val obj = JSONObject()
+        usage.forEach { (pkg, b) -> obj.put(pkg, JSONArray(b.toList())) }
+        prefs.edit().putString("hourly_usage_json", obj.toString()).apply()
+    }
+
     /**
      * Records a launch. Returns the tile that auto-grew because it is used a lot (small → medium
      * → wide, never for tiles the user sized themselves), or null when nothing changed size.
@@ -160,6 +194,7 @@ class TilePreferences(context: Context) {
         val usage = usageCounts().toMutableMap()
         usage[packageName] = (usage[packageName] ?: 0) + 1
         prefs.edit().putString("usage_json", JSONObject(usage).toString()).apply()
+        recordHour(packageName, Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
 
         val tile = tiles.firstOrNull { it.packageName == packageName && it.shortcutId == null } ?: return null
         tile.launchCount++

@@ -35,6 +35,9 @@ class SettingsPage(
         fun importBackup()
         fun confirmReset()
         fun showWeatherSetup()
+        fun applyWallpaperAccent()
+        fun showPrivateApps()
+        val privateAppCount: Int
         fun setWeatherUnit(unit: String)
         val weatherLocationLabel: String
         val iconPackLabel: String
@@ -113,11 +116,18 @@ class SettingsPage(
         // ── Colours & icons
         val colorsTop = page.childCount
         page.addView(ui.sectionTitle("Colours & icons"))
+        page.addView(ui.toggleRow("Match wallpaper", "Take the accent colour from your wallpaper", prefs.accentFromWallpaper) {
+            prefs.accentFromWallpaper = it
+            host.applyWallpaperAccent()
+            rerender()
+        })
         page.addView(ui.caption("Accent colour"))
         val accents = METRO_ACCENTS.map { Color.parseColor(it.second) }
         page.addView(ui.swatches(accents, prefs.accentColorInt.takeIf { it in accents }) { picked ->
             if (picked != null) {
                 prefs.accentColor = String.format("#%06X", 0xFFFFFF and picked)
+                // Picking a colour by hand stops following the wallpaper.
+                prefs.accentFromWallpaper = false
                 applyAndRerender()
             }
         })
@@ -155,9 +165,11 @@ class SettingsPage(
             prefs.swipeDownAction = swipeActions[i]
         })
         page.addView(ui.caption("Double-tap empty space"))
-        page.addView(ui.chips(listOf("Lock screen", "Nothing"), if (prefs.doubleTapAction == "lock") 0 else 1) { i ->
-            prefs.doubleTapAction = if (i == 0) "lock" else "none"
+        val tapActions = listOf("lock", "glance", "none")
+        page.addView(ui.chips(listOf("Lock screen", "Glance", "Nothing"), tapActions.indexOf(prefs.doubleTapAction).coerceAtLeast(0)) { i ->
+            prefs.doubleTapAction = tapActions[i]
         })
+        page.addView(ui.caption("Glance also works as a screen saver: Settings › Display › Screen saver › Glance."))
         page.addView(ui.action(
             R.drawable.ic_m_lock,
             "Gesture helper",
@@ -184,7 +196,12 @@ class SettingsPage(
             "Calendar events",
             if (host.calendarAccess) "On · the Calendar tile shows what's next" else "Off · tap to show upcoming events on the Calendar tile"
         ) { host.requestCalendarAccess() })
-        page.addView(ui.toggleRow("Smart auto-grow", "Small tiles you open often grow to medium", prefs.autoGrowEnabled) { prefs.autoGrowEnabled = it })
+        page.addView(ui.toggleRow("Smart auto-grow", "Tiles you open often grow (small → medium → wide); sizes you set stay", prefs.autoGrowEnabled) { prefs.autoGrowEnabled = it })
+        page.addView(ui.toggleRow("Suggested now", "Apps you usually open at this hour, above your tiles", prefs.suggestionsEnabled) {
+            prefs.suggestionsEnabled = it
+            host.applyLookAndFeel()
+        })
+        page.addView(ui.action(R.drawable.ic_m_lock, "Private apps", "${host.privateAppCount} hidden · unlock to see them") { host.showPrivateApps() })
 
         // ── Launcher
         page.addView(ui.sectionTitle("Launcher"))

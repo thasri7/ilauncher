@@ -41,6 +41,7 @@ import java.util.Calendar
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.random.Random
@@ -73,6 +74,8 @@ class MetroTileAdapter(
         fun onEditModeChanged(editing: Boolean)
         fun onFolderAppClick(app: TileItem, view: View)
         fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View)
+        /** Horizontal swipe across a tile that has notifications. */
+        fun onTileSwipe(tile: TileItem)
     }
 
     companion object {
@@ -295,6 +298,24 @@ class MetroTileAdapter(
     fun onMediaChanged() = notifyTypes(PAYLOAD_MEDIA) { it.type == TileType.MEDIA_PLAYER }
 
     fun onWeatherChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.WEATHER_LIVE }
+
+    /** "Your day" entrance order: today's info first, then tiles with unread messages. */
+    fun priorityOf(rv: RecyclerView, child: View): Int {
+        val tile = (rv.getChildViewHolder(child) as? TileHolder)?.tile ?: return 3
+        return when {
+            tile.type == TileType.CLOCK_WEATHER || tile.type == TileType.CALENDAR_BIG || tile.type == TileType.WEATHER_LIVE -> 0
+            (NotificationHub.get(tile.packageName)?.count ?: 0) > 0 -> 1
+            tile.type == TileType.FOLDER && tile.children.any { (NotificationHub.get(it.packageName)?.count ?: 0) > 0 } -> 1
+            else -> 2
+        }
+    }
+
+    /** Makes every tile with unread messages flip to show them (after unlocking). */
+    fun pulseUnread() {
+        tiles.filter { it.type == TileType.APP_SHORTCUT && (NotificationHub.get(it.packageName)?.count ?: 0) > 0 }
+            .forEach { pulsePending.add(it.id) }
+        notifyTypes(PAYLOAD_NOTIFICATIONS) { it.id in pulsePending }
+    }
 
     fun refreshIcons() {
         shortcutIcons.clear()
@@ -580,7 +601,9 @@ class MetroTileAdapter(
         var downX = 0f
         var downY = 0f
         var dragging = false
-        root.setOnTouchListener { _, e ->
+        var swiping = false
+        val swipeDistance = 56 * density
+        root.setOnTouchListener { v, e ->
             val tile = holder.tile ?: return@setOnTouchListener false
             val tilts = !editMode && prefs.tiltEnabled && tile.type != TileType.SECTION_HEADER && tile.type != TileType.WIDGET
             when (e.actionMasked) {
@@ -588,20 +611,39 @@ class MetroTileAdapter(
                     downX = e.rawX
                     downY = e.rawY
                     dragging = false
+                    swiping = false
                     if (tilts) MetroMotion.tiltTo(frame, e.x, e.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (editMode && !dragging && hypot(e.rawX - downX, e.rawY - downY) > touchSlop) {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (editMode && !dragging && hypot(dx, dy) > touchSlop) {
                         dragging = true
                         select(tile.id)
                         callbacks.onStartDrag(holder)
+                    } else if (!editMode && !swiping && abs(dx) > touchSlop * 0.6f && abs(dx) > 2 * abs(dy) && hasUnread(tile)) {
+                        // Claim the horizontal swipe before the pager turns it into a page change.
+                        swiping = true
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                        MetroMotion.releaseTilt(frame)
+                    } else if (swiping) {
+                        frame.translationX = dx * 0.35f
                     } else if (tilts) {
                         MetroMotion.tiltTo(frame, e.x, e.y)
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (!editMode) MetroMotion.releaseTilt(frame)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (swiping) {
+                        frame.animate().setStartDelay(0).translationX(0f).setDuration(180).start()
+                        if (e.actionMasked == MotionEvent.ACTION_UP && abs(e.rawX - downX) > swipeDistance) callbacks.onTileSwipe(tile)
+                        swiping = false
+                        // Swallow the tap that would otherwise open the app.
+                        return@setOnTouchListener true
+                    }
+                    if (!editMode) MetroMotion.releaseTilt(frame)
+                }
             }
-            false
+            swiping
         }
         root.setOnClickListener {
             val tile = holder.tile ?: return@setOnClickListener
@@ -627,6 +669,12 @@ class MetroTileAdapter(
             }
         }
         holder.btnMore.setOnClickListener { holder.tile?.let { callbacks.onTileMenu(it, root) } }
+    }
+
+    private fun hasUnread(tile: TileItem) = when (tile.type) {
+        TileType.APP_SHORTCUT -> tile.shortcutId == null && (NotificationHub.get(tile.packageName)?.count ?: 0) > 0
+        TileType.FOLDER -> tile.children.any { (NotificationHub.get(it.packageName)?.count ?: 0) > 0 }
+        else -> false
     }
 
     /** The view that Metro motion (tilt, turnstile, edit-mode shrink) animates for a tile. */

@@ -105,9 +105,12 @@ object MetroMotion {
         rv.postDelayed({ onEnd() }, (tiles.size - 1) * stagger + 150)
     }
 
-    /** The reverse of [turnstileOut]: tiles swing back in from behind the screen edge. */
-    fun turnstileIn(rv: RecyclerView, motionView: (View) -> View) {
-        val tiles = onScreenChildren(rv)
+    /**
+     * The reverse of [turnstileOut]: tiles swing back in from behind the screen edge. Lower
+     * [priority] values arrive first ("your day": clock, calendar and unread tiles lead).
+     */
+    fun turnstileIn(rv: RecyclerView, motionView: (View) -> View, priority: (View) -> Int = { 0 }) {
+        val tiles = onScreenChildren(rv).sortedBy(priority)
         val stagger = if (tiles.isEmpty()) 0L else minOf(24L, 220L / tiles.size)
         tiles.forEachIndexed { i, child ->
             val v = motionView(child)

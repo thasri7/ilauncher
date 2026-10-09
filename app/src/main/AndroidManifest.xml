@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
     <!-- Optional: upcoming events on the Calendar tile. Asked for only when the user turns it on. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- Fingerprint / face check before showing Private apps. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:allowBackup="true"
@@ -81,6 +83,27 @@
                 <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
             </intent-filter>
         </activity>
+
+        <!-- Glance: dim clock with notification icons (double-tap gesture). -->
+        <activity
+            android:name=".launcher.GlanceActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- Glance as an Android screen saver (Settings › Display › Screen saver). -->
+        <service
+            android:name=".launcher.GlanceDreamService"
+            android:exported="true"
+            android:label="Glance"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
 
         <!-- Optional gesture helper for double-tap to lock. -->
         <service

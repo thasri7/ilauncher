@@ -1,6 +1,7 @@
 package com.custom.keyboard.launcher
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -10,10 +11,21 @@ import androidx.core.app.NotificationManagerCompat
 
 /**
  * In-memory snapshot of the notifications on the device, grouped per app. It feeds the unread
- * counts on tiles and the text that live app tiles peek to. Nothing leaves the device.
+ * counts on tiles, the text live tiles peek to, the per-tile notification list and Glance.
+ * Nothing leaves the device.
  */
 object NotificationHub {
-    data class Entry(val count: Int, val title: String, val text: String)
+    /** One notification, with what is needed to open or dismiss it. */
+    data class Item(
+        val key: String,
+        val title: String,
+        val text: String,
+        val postTime: Long,
+        val contentIntent: PendingIntent?,
+        val clearable: Boolean
+    )
+
+    data class Entry(val count: Int, val title: String, val text: String, val items: List<Item>)
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = LinkedHashSet<() -> Unit>()
@@ -25,7 +37,14 @@ object NotificationHub {
     var isConnected = false
         internal set
 
+    @Volatile
+    internal var service: TileNotificationListener? = null
+
     fun get(packageName: String?): Entry? = packageName?.let { entries[it] }
+
+    /** Packages with notifications, most recent first (for Glance). */
+    fun packagesByRecency(): List<String> =
+        entries.entries.sortedByDescending { e -> e.value.items.maxOfOrNull { it.postTime } ?: 0L }.map { it.key }
 
     fun isAccessGranted(context: Context): Boolean =
         NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
@@ -38,18 +57,35 @@ object NotificationHub {
         listeners.remove(listener)
     }
 
+    /** Dismisses notifications, as swiping them away in the shade would. */
+    fun dismiss(keys: Collection<String>) {
+        val s = service ?: return
+        try {
+            s.cancelNotifications(keys.toTypedArray())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun CharSequence?.text() = this?.toString().orEmpty()
+
     internal fun publish(notifications: Array<StatusBarNotification>) {
         val grouped = notifications
             .filter { it.isClearable && it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
             .groupBy { it.packageName }
         entries = grouped.mapValues { (_, list) ->
-            val latest = list.maxBy { it.postTime }.notification.extras
-            Entry(
-                count = list.size,
-                title = latest.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty(),
-                text = (latest.getCharSequence(Notification.EXTRA_BIG_TEXT)
-                    ?: latest.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
-            )
+            val items = list.sortedByDescending { it.postTime }.map { sbn ->
+                val extras = sbn.notification.extras
+                Item(
+                    key = sbn.key,
+                    title = extras.getCharSequence(Notification.EXTRA_TITLE).text(),
+                    text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT)).text(),
+                    postTime = sbn.postTime,
+                    contentIntent = sbn.notification.contentIntent,
+                    clearable = sbn.isClearable
+                )
+            }
+            val latest = items.first()
+            Entry(count = items.size, title = latest.title, text = latest.text, items = items)
         }
         mainHandler.post { listeners.toList().forEach { it() } }
     }
@@ -65,11 +101,13 @@ class TileNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         NotificationHub.isConnected = true
+        NotificationHub.service = this
         refresh()
     }
 
     override fun onListenerDisconnected() {
         NotificationHub.isConnected = false
+        NotificationHub.service = null
         NotificationHub.clear()
     }
 

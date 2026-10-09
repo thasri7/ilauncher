@@ -26,19 +26,22 @@ class AppDrawerAdapter(
     private val isPinned: (String) -> Boolean,
     private val onAppClick: (AppLauncherHelper.AppEntry, View) -> Unit,
     private val onAppLongClick: ((AppLauncherHelper.AppEntry, View) -> Unit)? = null,
-    private val onHeaderClick: (() -> Unit)? = null
+    private val onHeaderClick: (() -> Unit)? = null,
+    private val onPrivateClick: (() -> Unit)? = null
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     sealed class Row {
         data class Header(val letter: Char) : Row()
         data class Label(val text: String) : Row()
         data class App(val entry: AppLauncherHelper.AppEntry) : Row()
+        data class Private(val count: Int) : Row()
     }
 
     companion object {
         private const val TYPE_HEADER = 0
         private const val TYPE_LABEL = 1
         private const val TYPE_APP = 2
+        private const val TYPE_PRIVATE = 3
         const val OTHER_LETTER = '#'
 
         fun letterOf(name: String): Char {
@@ -56,8 +59,14 @@ class AppDrawerAdapter(
         private set
 
     @SuppressLint("NotifyDataSetChanged")
-    fun submit(apps: List<AppLauncherHelper.AppEntry>, grouped: Boolean, mostUsed: List<AppLauncherHelper.AppEntry> = emptyList()) {
+    fun submit(
+        apps: List<AppLauncherHelper.AppEntry>,
+        grouped: Boolean,
+        mostUsed: List<AppLauncherHelper.AppEntry> = emptyList(),
+        privateCount: Int = 0
+    ) {
         val out = ArrayList<Row>(apps.size + 32)
+        if (grouped && privateCount > 0) out.add(Row.Private(privateCount))
         if (!grouped) {
             apps.mapTo(out) { Row.App(it) }
             lettersPresent = emptySet()
@@ -93,6 +102,7 @@ class AppDrawerAdapter(
         is Row.Header -> TYPE_HEADER
         is Row.Label -> TYPE_LABEL
         is Row.App -> TYPE_APP
+        is Row.Private -> TYPE_PRIVATE
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -100,6 +110,7 @@ class AppDrawerAdapter(
         return when (viewType) {
             TYPE_HEADER -> HeaderHolder(inflater.inflate(R.layout.item_app_header, parent, false))
             TYPE_LABEL -> LabelHolder(inflater.inflate(R.layout.item_drawer_label, parent, false))
+            TYPE_PRIVATE -> PrivateHolder(inflater.inflate(R.layout.item_app_drawer, parent, false))
             else -> AppHolder(inflater.inflate(R.layout.item_app_drawer, parent, false))
         }
     }
@@ -109,6 +120,7 @@ class AppDrawerAdapter(
             is Row.Header -> (holder as HeaderHolder).bind(row.letter)
             is Row.Label -> (holder as LabelHolder).bind(row.text)
             is Row.App -> (holder as AppHolder).bind(row.entry)
+            is Row.Private -> (holder as PrivateHolder).bind(row.count)
         }
     }
 
@@ -127,6 +139,22 @@ class AppDrawerAdapter(
 
         fun bind(text: String) {
             label.text = text.lowercase(Locale.getDefault())
+        }
+    }
+
+    /** "Private apps": hidden apps, opened only after the phone's fingerprint / PIN check. */
+    inner class PrivateHolder(view: View) : RecyclerView.ViewHolder(view) {
+        private val icon: ImageView = view.findViewById(R.id.iv_drawer_icon)
+        private val name: TextView = view.findViewById(R.id.tv_drawer_name)
+
+        fun bind(count: Int) {
+            icon.setImageResource(R.drawable.ic_m_lock)
+            icon.imageTintList = ColorStateList.valueOf(accent())
+            val pad = (icon.resources.displayMetrics.density * 9).toInt()
+            icon.setPadding(pad, pad, pad, pad)
+            name.text = "Private apps · $count"
+            itemView.setOnClickListener { onPrivateClick?.invoke() }
+            itemView.setOnLongClickListener(null)
         }
     }
 

@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:clipChildren="false">
 
-    <!-- Padding is set from code so it follows the tile gap setting. -->
+    <!-- Padding is set from code so it follows the tile gap and the suggestions strip. -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_metro_tiles"
         android:layout_width="match_parent"
@@ -13,4 +13,33 @@
         android:clipToPadding="false"
         android:overScrollMode="never"
         android:scrollbars="none" />
+
+    <!-- "Suggested now": apps usually opened at this hour. Slides away as Start scrolls. -->
+    <LinearLayout
+        android:id="@+id/ll_suggestions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_suggestions_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-light"
+            android:paddingStart="2dp"
+            android:paddingBottom="4dp"
+            android:shadowColor="#99000000"
+            android:shadowRadius="4"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <LinearLayout
+            android:id="@+id/ll_suggestions_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </LinearLayout>
 </FrameLayout>
