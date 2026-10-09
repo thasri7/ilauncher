@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android's own backup (Google account) keeps Start: settings, every space's tiles and the
+     pictures tiles use. Widget ids aren't portable, so widget tiles show "re-add" on a new phone. -->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+        <!-- Keyboard clipboard history can hold private text: it stays on this phone. -->
+        <exclude domain="sharedpref" path="ikeys_prefs.xml" />
+    <include domain="file" path="tile_media" />
+    <include domain="file" path="start_background.jpg" />
+</full-backup-content>

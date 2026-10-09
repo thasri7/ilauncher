@@ -40,6 +40,19 @@ class SettingsPage(
         fun showPrivateApps()
         fun applyDrawerSettings()
         fun applySystemBars()
+        fun showOverview()
+        fun showArrange()
+        fun addSpace()
+        fun saveCurrentTheme()
+        fun exportTheme(theme: MetroThemes.Theme)
+        fun importTheme()
+        fun requestUsageAccess()
+        fun requestActivityAccess()
+        fun openScreenSaverSettings()
+        fun backupNow()
+        val spaceCount: Int
+        val usageAccess: Boolean
+        val activityAccess: Boolean
         val privateAppCount: Int
         val weatherLocationLabel: String
         val iconPackLabel: String
@@ -52,12 +65,15 @@ class SettingsPage(
     private data class Section(val key: String, val icon: Int, val title: String, val summary: () -> String)
 
     private val sections = listOf(
-        Section("start", R.drawable.ic_m_apps, "Start", { "Tiles per row, gaps, corners, lock layout" }),
+        Section("themes", R.drawable.ic_m_palette, "Themes", { MetroThemes.builtIns.plus(MetroThemes.saved(prefs)).firstOrNull { MetroThemes.matches(prefs, it) }?.name ?: "Your own look" }),
+        Section("start", R.drawable.ic_m_apps, "Start", { "Tiles per row, gaps, corners, glass, lock layout" }),
+        Section("spaces", R.drawable.ic_m_spaces, "Spaces & groups", { "${host.spaceCount} space${if (host.spaceCount == 1) "" else "s"} · arrange, fold groups" }),
         Section("background", R.drawable.ic_m_photo, "Background", { if (prefs.backgroundMode == "picture") "Picture in tiles" else "Wallpaper · parallax" }),
         Section("colours", R.drawable.ic_m_palette, "Colours & icons", { if (prefs.accentFromWallpaper) "Matching wallpaper · ${host.iconPackLabel}" else host.iconPackLabel }),
         Section("tiles", R.drawable.ic_m_live, "Live tiles & motion", { "Animations, tilt, live tiles, auto-grow" }),
-        Section("apps", R.drawable.ic_m_search, "All apps", { "${if (prefs.drawerStyle == "grid") "Grid" else "List"} · private apps" }),
-        Section("gestures", R.drawable.ic_m_lock, "Gestures", { "Swipe down, double-tap" }),
+        Section("apps", R.drawable.ic_m_search, "All apps & search", { "${if (prefs.drawerStyle == "grid") "Grid" else "List"} · private apps · ${engineName()}" }),
+        Section("gestures", R.drawable.ic_m_swipe, "Gestures", { "Swipe, double-tap, pinch, two fingers" }),
+        Section("battery", R.drawable.ic_m_leaf, "Battery & Glance", { if (prefs.nightstand) "Nightstand on" else if (prefs.batterySaverPause) "Rests in battery saver" else "Always live" }),
         Section("weather", R.drawable.ic_m_sun, "Weather", { host.weatherLocationLabel }),
         Section("privacy", R.drawable.ic_m_notifications, "Live data & permissions", { if (host.notificationAccess) "Notification access on" else "Notification access off" }),
         Section("backup", R.drawable.ic_m_backup, "Backup & reset", { "Save or restore your Start" }),
@@ -103,6 +119,9 @@ class SettingsPage(
         } else {
             page.addView(ui.pageTitle(sections.firstOrNull { it.key == target }?.title?.lowercase() ?: "settings"))
             when (target) {
+                "themes" -> themes(page, rerender)
+                "spaces" -> spaces(page)
+                "battery" -> battery(page)
                 "start" -> start(page)
                 "background" -> background(page, rerender)
                 "colours" -> colours(page, rerender)
@@ -134,12 +153,18 @@ class SettingsPage(
         })
         page.addView(chipSetting("Tile gap", listOf("None", "Thin", "Normal", "Wide"), listOf(0, 2, 4, 8), prefs.gutterDp) { prefs.gutterDp = it })
         page.addView(chipSetting("Corners", listOf("Square", "Soft", "Round"), listOf(0, 6, 14), prefs.cornerRadiusDp) { prefs.cornerRadiusDp = it })
-        page.addView(chipSetting("Tile transparency", listOf("Solid", "Light", "Medium", "Glass"), listOf(100, 85, 70, 50), prefs.tileOpacity) { prefs.tileOpacity = it })
+        page.addView(chipSetting("Tile transparency", listOf("Solid", "Light", "Medium", "Sheer"), listOf(100, 85, 70, 50), prefs.tileOpacity) { prefs.tileOpacity = it })
+        page.addView(ui.caption("Tile finish"))
+        page.addView(ui.chips(listOf("Flat", "Frosted glass"), if (prefs.tileFinish == "glass") 1 else 0) { i ->
+            prefs.tileFinish = if (i == 1) "glass" else "flat"
+            host.applyLookAndFeel()
+        })
         page.addView(ui.toggleRow("Tile labels", "Show names on medium and larger tiles", prefs.showLabels) {
             prefs.showLabels = it
             host.applyLookAndFeel()
         })
         page.addView(ui.toggleRow("Lock Start", "Stop tiles being moved, resized or unpinned by accident", prefs.layoutLocked) { prefs.layoutLocked = it })
+        page.addView(ui.toggleRow("Name folders for me", "New folders and stacks are named after their apps (Social, Games…)", prefs.folderAutoName) { prefs.folderAutoName = it })
         page.addView(ui.toggleRow("Suggested now", "Apps you usually open at this hour, above your tiles", prefs.suggestionsEnabled) {
             prefs.suggestionsEnabled = it
             host.applyLookAndFeel()
@@ -207,6 +232,9 @@ class SettingsPage(
             host.applyLookAndFeel()
         })
         page.addView(ui.toggleRow("Smart auto-grow", "Tiles you open often grow (small → medium → wide); sizes you set stay", prefs.autoGrowEnabled) { prefs.autoGrowEnabled = it })
+        val speeds = listOf("slow", "normal", "fast")
+        page.addView(ui.caption("Live tile pace"))
+        page.addView(ui.chips(listOf("Calm", "Normal", "Lively"), speeds.indexOf(prefs.liveSpeed).coerceAtLeast(1)) { i -> prefs.liveSpeed = speeds[i] })
         val transitions = listOf("slide", "cube", "depth")
         page.addView(ui.caption("Swipe to All apps"))
         page.addView(ui.chips(listOf("Slide", "Cube", "Depth"), transitions.indexOf(prefs.pageTransition).coerceAtLeast(0)) { i ->
@@ -232,6 +260,19 @@ class SettingsPage(
             host.applyDrawerSettings()
         })
         page.addView(ui.action(R.drawable.ic_m_lock, "Private apps", "${host.privateAppCount} hidden · unlock to see them") { host.showPrivateApps() })
+        val engines = listOf("google", "bing", "duckduckgo", "brave", "ecosia")
+        page.addView(ui.caption("Web search"))
+        page.addView(ui.chips(listOf("Google", "Bing", "DuckDuckGo", "Brave", "Ecosia"), engines.indexOf(prefs.searchEngine).coerceAtLeast(0)) { i ->
+            prefs.searchEngine = engines[i]
+        })
+    }
+
+    private fun engineName() = when (prefs.searchEngine) {
+        "bing" -> "Bing"
+        "duckduckgo" -> "DuckDuckGo"
+        "brave" -> "Brave"
+        "ecosia" -> "Ecosia"
+        else -> "Google"
     }
 
     private fun gestures(page: LinearLayout) {
@@ -245,13 +286,28 @@ class SettingsPage(
         page.addView(ui.chips(listOf("Lock screen", "Glance", "Nothing"), tapActions.indexOf(prefs.doubleTapAction).coerceAtLeast(0)) { i ->
             prefs.doubleTapAction = tapActions[i]
         })
+        val twoFinger = listOf("search", "notifications", "overview", "none")
+        page.addView(ui.caption("Two fingers down"))
+        page.addView(ui.chips(listOf("Search", "Notifications", "Overview", "Nothing"), twoFinger.indexOf(prefs.twoFingerAction).coerceAtLeast(0)) { i ->
+            prefs.twoFingerAction = twoFinger[i]
+        })
+        val pinch = listOf("overview", "settings", "none")
+        page.addView(ui.caption("Pinch in"))
+        page.addView(ui.chips(listOf("Overview", "Settings", "Nothing"), pinch.indexOf(prefs.pinchAction).coerceAtLeast(0)) { i ->
+            prefs.pinchAction = pinch[i]
+        })
+        val swipeRight = listOf("space", "search", "none")
+        page.addView(ui.caption("Swipe right on Start"))
+        page.addView(ui.chips(listOf("Next space", "Search", "Nothing"), swipeRight.indexOf(prefs.swipeRightAction).coerceAtLeast(0)) { i ->
+            prefs.swipeRightAction = swipeRight[i]
+        })
         page.addView(ui.action(
             R.drawable.ic_m_lock,
             "Gesture helper",
             if (host.gestureServiceEnabled) "On · lock screen and notifications work everywhere" else "Off · needed for double-tap to lock"
         ) { host.openAccessibilitySettings() })
         page.addView(ui.caption("Glance also works as a screen saver: Settings › Display › Screen saver › Glance."))
-        page.addView(ui.caption("Swipe across a tile with unread messages to see them."))
+        page.addView(ui.caption("Swipe across a tile with unread messages to see them, or across an app stack to switch apps. Each app tile can have its own swipe action (tile menu)."))
     }
 
     private fun weather(page: LinearLayout) {
@@ -274,12 +330,23 @@ class SettingsPage(
             "Calendar events",
             if (host.calendarAccess) "On · the Calendar tile shows what's next" else "Off · tap to show upcoming events"
         ) { host.requestCalendarAccess() })
-        page.addView(ui.caption("Notifications, calendar and usage stay on this phone. Only weather uses the internet."))
+        page.addView(ui.action(
+            R.drawable.ic_m_phone_time,
+            "Usage access",
+            if (host.usageAccess) "On · Screen time and Data usage tiles are live" else "Off · needed for Screen time and Data usage tiles"
+        ) { host.requestUsageAccess() })
+        page.addView(ui.action(
+            R.drawable.ic_m_walk,
+            "Physical activity",
+            if (host.activityAccess) "On · the Steps tile counts your steps" else "Off · needed for the Steps tile"
+        ) { host.requestActivityAccess() })
+        page.addView(ui.caption("Notifications, calendar, usage and steps stay on this phone. Only weather uses the internet."))
     }
 
     private fun backup(page: LinearLayout) {
-        page.addView(ui.action(R.drawable.ic_m_backup, "Back up Start", "Save tiles and settings to a file") { host.exportBackup() })
+        page.addView(ui.action(R.drawable.ic_m_backup, "Back up Start", "Every space, tile, setting and picture in one file · pick Drive to keep it in the cloud") { host.exportBackup() })
         page.addView(ui.action(R.drawable.ic_m_restore, "Restore Start", "Load a backup file") { host.importBackup() })
+        page.addView(ui.action(R.drawable.ic_m_cloud, "Include in phone backup", "Android's own backup to your Google account restores Start on a new phone") { host.backupNow() })
         page.addView(ui.action(R.drawable.ic_m_reset, "Reset Start", "Put the default tiles back", danger = true) { host.confirmReset() })
     }
 
@@ -287,6 +354,77 @@ class SettingsPage(
         page.addView(ui.action(R.drawable.ic_m_home, "Set as default home app", "Needed for app shortcuts and pinning") { host.openHomeSettings() })
         page.addView(ui.action(R.drawable.ic_m_widgets, "Add a widget") { host.showWidgetPicker() })
         page.addView(ui.action(R.drawable.ic_m_keyboard, "Keyboard settings & themes") { host.openKeyboardSettings() })
+    }
+
+    private fun themes(page: LinearLayout, rerender: () -> Unit) {
+        page.addView(ui.caption("A theme changes colours, glass, corners, gaps and labels. Your tiles stay where they are."))
+        page.addView(ui.sectionTitle("Built in"))
+        MetroThemes.builtIns.forEach { t -> page.addView(themeRow(t, rerender)) }
+        val saved = MetroThemes.saved(prefs)
+        page.addView(ui.sectionTitle("Yours"))
+        if (saved.isEmpty()) page.addView(ui.caption("Save your current look to switch back to it any time."))
+        saved.forEach { t -> page.addView(themeRow(t, rerender)) }
+        page.addView(ui.action(R.drawable.ic_m_add, "Save current look") { host.saveCurrentTheme() })
+        page.addView(ui.action(R.drawable.ic_m_restore, "Add a theme file", "Themes others shared with you") { host.importTheme() })
+        if (saved.isNotEmpty()) page.addView(ui.caption("Share a theme with the arrow; long-press one of yours to delete it."))
+    }
+
+    private fun themeRow(t: MetroThemes.Theme, rerender: () -> Unit): View {
+        val accent = runCatching { Color.parseColor(t.accent) }.getOrDefault(Color.GRAY)
+        val swatch = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = ui.dp(minOf(t.corners, 10)).toFloat()
+            setColor(Color.argb(t.opacity.coerceIn(30, 100) * 255 / 100, Color.red(accent), Color.green(accent), Color.blue(accent)))
+            if (t.finish == "glass") setStroke(ui.dp(1), 0x66FFFFFF)
+            setSize(ui.dp(28), ui.dp(28))
+        }
+        val inUse = MetroThemes.matches(prefs, t)
+        val details = listOfNotNull(
+            if (t.finish == "glass") "Glass" else "Flat",
+            when {
+                t.corners >= 12 -> "round"
+                t.corners > 0 -> "soft"
+                else -> "square"
+            },
+            "${t.columns} per row",
+            if (t.colorMode == "icon") "app colours" else null
+        ).joinToString(" · ")
+        val row = ui.actionWithIcon(
+            icon = swatch,
+            title = t.name + if (inUse) "  ✓" else "",
+            subtitle = details,
+            trailingIcon = R.drawable.ic_m_forward,
+            trailingDescription = "Share theme",
+            onTrailing = { host.exportTheme(t) }
+        ) {
+            MetroThemes.apply(prefs, t)
+            host.applyLookAndFeel()
+            rerender()
+        }
+        if (!t.builtIn) row.setOnLongClickListener {
+            MetroThemes.delete(prefs, t)
+            rerender()
+            true
+        }
+        return row
+    }
+
+    private fun spaces(page: LinearLayout) {
+        page.addView(ui.caption("Spaces are separate Start screens, like Work and Home, each with its own tiles. Swipe right on Start to move between them."))
+        page.addView(ui.action(R.drawable.ic_m_overview, "Overview", "See every space and group · or pinch Start") { host.showOverview() })
+        page.addView(ui.action(R.drawable.ic_m_add, "New space") { host.addSpace() })
+        page.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Pack tightly, sort, group by kind, grow what you use") { host.showArrange() })
+        page.addView(ui.caption("Groups: add a Group name tile, then tap a group's name on Start to fold it away."))
+    }
+
+    private fun battery(page: LinearLayout) {
+        page.addView(ui.toggleRow("Rest in battery saver", "When Android's battery saver is on, tiles stop flipping and the wallpaper stays still", prefs.batterySaverPause) {
+            prefs.batterySaverPause = it
+        })
+        page.addView(ui.toggleRow("Nightstand", "While charging, Start turns into Glance after a minute untouched", prefs.nightstand) {
+            prefs.nightstand = it
+        })
+        page.addView(ui.action(R.drawable.ic_m_moon, "Glance as screen saver", "Settings › Screen saver › Glance, when charging or docked") { host.openScreenSaverSettings() })
+        page.addView(ui.caption("Live tiles only update while Start is on screen. Steps, switches and screen time stop listening when you leave Start."))
     }
 
     private fun chipSetting(title: String, labels: List<String>, values: List<Int>, current: Int, save: (Int) -> Unit): View =

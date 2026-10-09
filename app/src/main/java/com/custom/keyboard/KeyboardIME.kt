@@ -534,21 +534,35 @@ class KeyboardIME : InputMethodService() {
             }
             "clips" -> {
                 captureInitialClipboard()
-                val clips = prefs.clipHistory
-                if (clips.isEmpty()) {
+                val pinned = prefs.pinnedClips
+                val clips = prefs.clipHistory.filter { it !in pinned }
+                if (clips.isEmpty() && pinned.isEmpty()) {
                     featureDrawerContainer.addView(drawerNote("Copied text shows up here"))
                 } else {
-                    featureDrawerContainer.addView(chip("Clear", icon = R.drawable.ic_m_delete) {
+                    if (clips.isNotEmpty()) featureDrawerContainer.addView(chip("Clear", icon = R.drawable.ic_m_delete) {
                         prefs.clearClipHistory()
                         activeDrawerType = null
                         showFeatureDrawer("clips")
                     })
-                    for (clip in clips) {
-                        featureDrawerContainer.addView(chip(clip.replace('\n', ' ')) {
+                    val pinOrUnpin = { clip: String ->
+                        val nowPinned = prefs.togglePinnedClip(clip)
+                        Toast.makeText(this, if (nowPinned) "Pinned · it stays until you unpin it" else "Unpinned", Toast.LENGTH_SHORT).show()
+                        activeDrawerType = null
+                        showFeatureDrawer("clips")
+                    }
+                    for (clip in pinned) {
+                        featureDrawerContainer.addView(chip(clip.replace('\n', ' '), accent = true, icon = R.drawable.ic_m_pin, onLongClick = { pinOrUnpin(clip) }) {
                             currentInputConnection?.commitText(clip, 1)
                             closeFeatureDrawer()
                         })
                     }
+                    for (clip in clips) {
+                        featureDrawerContainer.addView(chip(clip.replace('\n', ' '), onLongClick = { pinOrUnpin(clip) }) {
+                            currentInputConnection?.commitText(clip, 1)
+                            closeFeatureDrawer()
+                        })
+                    }
+                    featureDrawerContainer.addView(drawerNote("Long-press to pin or unpin"))
                 }
             }
             "translate" -> showTranslateDrawer()
@@ -676,6 +690,18 @@ class KeyboardIME : InputMethodService() {
             })
         }
 
+        // Next-word hints learned from how you type.
+        if (prefs.nextWordHints && lastCommittedWord.isNotEmpty()) {
+            for (word in dictionary.predictNext(lastCommittedWord)) {
+                val shown = if (isShifted) word.replaceFirstChar { it.uppercase() } else word
+                smartIdleContainer.addView(chip(shown, accent = true) {
+                    currentInputConnection?.commitText("$shown ", 1)
+                    rememberWord(shown)
+                    updateSmartIdleBar()
+                })
+            }
+        }
+
         // 2. Emoji you actually use, most recent first.
         val emojis = prefs.recentEmojis.take(8)
         if (emojis.isEmpty()) {
@@ -783,6 +809,22 @@ class KeyboardIME : InputMethodService() {
         currentCenterSuggestion = result.topMatch
     }
 
+    private val glideTrail = GlideTrail()
+
+    /** After a swipe: the other likely words, so one tap fixes a wrong guess. */
+    private fun showGlideGuesses(chosen: String, others: List<String>) {
+        if (others.isEmpty()) return
+        featureDrawerScroll.visibility = View.GONE
+        smartIdleScroll.visibility = View.GONE
+        suggestionTypingBar.visibility = View.VISIBLE
+        val cased = others.map { if (chosen.first().isUpperCase()) it.replaceFirstChar { c -> c.uppercase() } else it }
+        suggestionLeft.text = cased.getOrNull(0).orEmpty()
+        suggestionCenter.text = chosen
+        suggestionCenter.setTextColor(ContextCompat.getColor(this, R.color.accent))
+        suggestionRight.text = cased.getOrNull(1).orEmpty()
+        currentCenterSuggestion = ""
+    }
+
     private fun clearSuggestions() {
         suggestionLeft.text = ""
         suggestionCenter.text = ""
@@ -809,16 +851,41 @@ class KeyboardIME : InputMethodService() {
             else -> word
         }
 
+        // A tap on another swipe guess swaps it for the word the swipe typed.
+        val glided = lastGlideWord
+        if (glided != null && len == 0) {
+            val before = ic.getTextBeforeCursor(glided.length + 1, 0)?.toString()
+            if (before == "$glided ") ic.deleteSurroundingText(glided.length + 1, 0)
+            lastGlideWord = null
+            if (glided.isNotEmpty()) dictionary.forgetWordUse(glided)
+        }
         ic.commitText("$cleanWord ", 1)
-        dictionary.learnWord(cleanWord)
+        rememberWord(cleanWord)
         composingWord.setLength(0)
         clearSuggestions()
         checkAutoCapitalization()
     }
 
+    /** Last word typed, for next-word hints. */
+    private var lastCommittedWord = ""
+    /** The word a swipe just typed, which a tap on another guess replaces. */
+    private var lastGlideWord: String? = null
+
+    private fun rememberWord(word: String) {
+        val clean = word.trim().trimEnd('.', ',', '!', '?', ';', ':')
+        if (clean.isEmpty() || !clean.all { it.isLetter() || it == '\'' }) {
+            lastCommittedWord = ""
+            return
+        }
+        dictionary.learnWord(clean)
+        if (lastCommittedWord.isNotEmpty()) dictionary.learnPair(lastCommittedWord, clean)
+        lastCommittedWord = clean
+    }
+
     private fun finishWordCommit() {
+        lastGlideWord = null
         if (composingWord.isNotEmpty()) {
-            dictionary.learnWord(composingWord.toString())
+            rememberWord(composingWord.toString())
             composingWord.setLength(0)
         }
         clearSuggestions()
@@ -1323,10 +1390,12 @@ class KeyboardIME : InputMethodService() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = abs(event.x - startX)
                     val dy = abs(event.y - startY)
-                    if (dx > 30f || dy > 30f) {
+                    if (prefs.glideTyping && (dx > 30f || dy > 30f || isGliding)) {
                         handler.removeCallbacks(longPressRunnable)
                         hideKeyPopup()
+                        if (!isGliding) glideTrail.start(keysWrapper, event.rawX, event.rawY, prefs.glideTrail)
                         isGliding = true
+                        glideTrail.add(event.rawX, event.rawY)
                         val touchedChar = findKeyCharUnderTouch(event.rawX, event.rawY)
                         if (touchedChar != null && (glideChars.isEmpty() || glideChars.last() != touchedChar)) {
                             glideChars.add(touchedChar)
@@ -1340,18 +1409,37 @@ class KeyboardIME : InputMethodService() {
                     if (isLongPressed) {
                         return@setOnTouchListener true
                     }
-                    if (isGliding && glideChars.size >= 3) {
-                        val matchedWord = dictionary.matchGlidePath(glideChars)
+                    glideTrail.finish()
+                    if (isGliding && glideChars.size >= 2) {
+                        val guesses = dictionary.glideCandidates(glideChars)
+                        val matchedWord = guesses.firstOrNull()
                         if (!matchedWord.isNullOrEmpty()) {
                             feedback(v)
-                            val formattedWord = formatWithFancyStyle(matchedWord)
+                            val cased = if (isShifted || isCapsLock) matchedWord.replaceFirstChar { it.uppercase() } else matchedWord
+                            val formattedWord = formatWithFancyStyle(cased)
+                            // Start a new word after the previous one with a space, like other keyboards.
+                            val before = currentInputConnection?.getTextBeforeCursor(1, 0)?.toString().orEmpty()
+                            if (composingWord.isNotEmpty()) finishWordCommit()
+                            if (before.isNotEmpty() && !before.last().isWhitespace() && before.last() !in "([{\"'") currentInputConnection?.commitText(" ", 1)
                             currentInputConnection?.commitText("$formattedWord ", 1)
-                            dictionary.learnWord(matchedWord)
                             finishWordCommit()
+                            rememberWord(cased)
+                            lastGlideWord = formattedWord
+                            showGlideGuesses(cased, guesses.drop(1))
+                            if (isShifted && !isCapsLock) {
+                                isShifted = false
+                                updateKeyCase()
+                            }
                             glideChars.clear()
                             isGliding = false
                             return@setOnTouchListener true
                         }
+                    }
+                    if (isGliding) {
+                        // A swipe that matched no word types nothing.
+                        glideChars.clear()
+                        isGliding = false
+                        return@setOnTouchListener true
                     }
 
                     val formatted = formatWithFancyStyle(charLetter)
@@ -1369,6 +1457,7 @@ class KeyboardIME : InputMethodService() {
                 MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(longPressRunnable)
                     hideKeyPopup()
+                    glideTrail.finish()
                     glideChars.clear()
                     isGliding = false
                     true

@@ -27,6 +27,7 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -35,6 +36,7 @@ import android.text.TextWatcher
 import android.text.format.DateUtils
 import android.text.format.DateFormat
 import android.view.GestureDetector
+import android.view.ScaleGestureDetector
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -42,6 +44,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
+import android.app.DatePickerDialog
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -65,6 +68,15 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.custom.keyboard.launcher.AgendaProvider
+import com.custom.keyboard.launcher.AppCategories
+import com.custom.keyboard.launcher.BackupArchive
+import com.custom.keyboard.launcher.Countdown
+import com.custom.keyboard.launcher.MetroThemes
+import com.custom.keyboard.launcher.QuickToggles
+import com.custom.keyboard.launcher.StartArranger
+import com.custom.keyboard.launcher.StepCounter
+import com.custom.keyboard.launcher.UsageReader
+import com.custom.keyboard.launcher.WorldClocks
 import com.custom.keyboard.launcher.AppDrawerAdapter
 import com.custom.keyboard.launcher.AppSearch
 import com.custom.keyboard.launcher.AppShortcuts
@@ -118,6 +130,8 @@ class LauncherActivity : AppCompatActivity() {
     private lateinit var metroOverlay: MetroOverlay
     private lateinit var ui: MetroUi
     private lateinit var settingsPage: SettingsPage
+    private lateinit var toggles: QuickToggles
+    private lateinit var stepCounter: StepCounter
     private val mathCalc = MathCalculator()
     private val lightFace: Typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
 
@@ -178,11 +192,13 @@ class LauncherActivity : AppCompatActivity() {
         override fun run() {
             val rv = rvTiles
             if (rv != null && !metroOverlay.isShowing && searchPanel.visibility != View.VISIBLE &&
-                pager.currentItem == LauncherPagerAdapter.PAGE_TILES && rv.scrollState == RecyclerView.SCROLL_STATE_IDLE
+                pager.currentItem == LauncherPagerAdapter.PAGE_TILES && rv.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
+                !isPowerSaving()
             ) {
                 tileAdapter.runLiveStep(rv)
             }
-            handler.postDelayed(this, 2500)
+            // Slower beat in battery saver: nothing flips then, so check rarely.
+            handler.postDelayed(this, if (isPowerSaving()) 15_000L else 2500L)
         }
     }
 
@@ -213,6 +229,7 @@ class LauncherActivity : AppCompatActivity() {
             if (state == lastBatteryState) return
             lastBatteryState = state
             tileAdapter.onBatteryChanged()
+            if (prefs.nightstand) scheduleNightstand()
         }
     }
 
@@ -247,8 +264,60 @@ class LauncherActivity : AppCompatActivity() {
         }
     } else null
 
+    /** What to do once the phone's lock check passes (pre-Android 11 path). */
+    private var afterUnlock: (() -> Unit)? = null
     private val privateUnlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) showPrivateApps()
+        val then = afterUnlock
+        afterUnlock = null
+        if (result.resultCode == RESULT_OK) then?.invoke()
+    }
+    /** Locked folders opened since Start was last left; they lock again when you leave. */
+    private val unlockedFolders = HashSet<String>()
+
+    private val activityPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            stepCounter.start()
+            tileAdapter.onStepsChanged()
+        } else toast("Steps need activity access")
+    }
+
+    private val coverPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val tile = pictureTarget
+        pictureTarget = null
+        if (uri == null || tile == null) return@registerForActivityResult
+        TileMedia.saveCover(this, tile.id, uri) { ok ->
+            if (ok) {
+                tile.extras["cover"] = "1"
+                restyle(tile)
+            } else toast("Couldn't read that picture")
+        }
+    }
+
+    private val themeWriter = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val theme = pendingThemeExport
+        pendingThemeExport = null
+        if (uri == null || theme == null) return@registerForActivityResult
+        val ok = runCatching {
+            contentResolver.openOutputStream(uri)?.use { it.write(MetroThemes.toJson(theme).toString(2).toByteArray()) } != null
+        }.getOrDefault(false)
+        toast(if (ok) "Theme saved" else "Couldn't save the theme")
+    }
+    private var pendingThemeExport: MetroThemes.Theme? = null
+
+    private val themeReader = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val theme = runCatching {
+            contentResolver.openInputStream(uri)?.use { MetroThemes.fromJson(org.json.JSONObject(it.readBytes().toString(Charsets.UTF_8))) }
+        }.getOrNull()
+        if (theme == null) {
+            toast("That isn't a theme file")
+            return@registerForActivityResult
+        }
+        MetroThemes.save(prefs, theme)
+        MetroThemes.apply(prefs, theme)
+        applyLookAndFeel()
+        toast("Theme “${theme.name}” added")
+        if (metroOverlay.isShowing) settingsPage.show("themes", animate = false)
     }
 
     // ── Activity results ────────────────────────────────────────────────────────────────
@@ -330,34 +399,39 @@ class LauncherActivity : AppCompatActivity() {
         if (metroOverlay.isShowing) settingsPage.show("privacy", animate = false)
     }
 
-    private val backupWriter = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    private val backupWriter = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri == null) return@registerForActivityResult
+        prefs.saveTiles(tiles)
         val ok = try {
-            contentResolver.openOutputStream(uri)?.use { it.write(prefs.exportJson().toByteArray()) } != null
+            contentResolver.openOutputStream(uri)?.use { BackupArchive.write(this, prefs, it) } != null
         } catch (_: Exception) {
             false
         }
-        toast(if (ok) "Start backed up" else "Couldn't save the backup")
+        toast(if (ok) "Start backed up with its pictures" else "Couldn't save the backup")
     }
 
     private val backupReader = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
-        val text = try {
-            contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        val bytes = try {
+            contentResolver.openInputStream(uri)?.let { BackupArchive.readAll(it) }
         } catch (_: Exception) {
             null
         }
-        val oldWidgets = tiles.filter { it.type == TileType.WIDGET }.map { it.appWidgetId }
-        if (text == null || !prefs.importJson(text)) {
+        val oldWidgets = prefs.spaces().flatMap { space -> prefs.tilesOf(space.id) }.filter { it.type == TileType.WIDGET }.map { it.appWidgetId } +
+            tiles.filter { it.type == TileType.WIDGET }.map { it.appWidgetId }
+        val restored = bytes != null && runCatching { BackupArchive.read(this, prefs, bytes) }.getOrDefault(false)
+        if (!restored) {
             toast("That isn't a Start backup")
             return@registerForActivityResult
         }
+        TileMedia.clearCache()
         oldWidgets.forEach { widgets.delete(it) }
         metroOverlay.dismiss()
         tileAdapter.exitEditMode()
         tileAdapter.closeFolder()
         tiles.clear()
         tiles.addAll(prefs.loadTiles())
+        tvTitle.text = spaceName()
         loadBackdrop()
         icons.setIconPack(prefs.iconPack) { onIconsChanged() }
         applyLookAndFeel()
@@ -453,6 +527,8 @@ class LauncherActivity : AppCompatActivity() {
         seedAppTiles()
 
         media = MediaTileController(this) { if (::tileAdapter.isInitialized) tileAdapter.onMediaChanged() }
+        toggles = QuickToggles(this) { if (::tileAdapter.isInitialized) tileAdapter.onTogglesChanged() }
+        stepCounter = StepCounter(this, prefs) { if (::tileAdapter.isInitialized) tileAdapter.onStepsChanged() }
         tileAdapter = MetroTileAdapter(
             context = this,
             tiles = tiles,
@@ -465,6 +541,8 @@ class LauncherActivity : AppCompatActivity() {
             weather = { weather.report },
             weatherConfigured = { weather.hasLocation },
             cellPitch = { gridLayoutManager.cellPitch },
+            toggles = toggles,
+            steps = stepCounter,
             callbacks = tileCallbacks
         )
         gridLayoutManager = MetroGridLayoutManager { position -> tileAdapter.spanFor(position) }
@@ -529,6 +607,33 @@ class LauncherActivity : AppCompatActivity() {
             onTilesPageReady = { rv -> setupTilesPage(rv) },
             onDrawerPageReady = { page -> setupDrawerPage(page) }
         )
+        tvTitle.text = spaceName()
+        tvTitle.setOnClickListener { if (pager.currentItem == LauncherPagerAdapter.PAGE_TILES) showOverview() else showJumpList() }
+        // Swipe right on Start (there is no page to its left): next space, or the chosen action.
+        val swipeRight = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            private var startedOnTiles = false
+
+            override fun onDown(e: MotionEvent): Boolean {
+                startedOnTiles = pager.currentItem == LauncherPagerAdapter.PAGE_TILES
+                return false
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                val start = e1 ?: return false
+                if (!startedOnTiles || pager.currentItem != LauncherPagerAdapter.PAGE_TILES || tileAdapter.editMode || metroOverlay.isShowing) return false
+                if (e2.x - start.x > ui.dp(90) && velocityX > 1200 && abs(velocityX) > 2 * abs(velocityY)) {
+                    runSwipeRightGesture()
+                    return true
+                }
+                return false
+            }
+        })
+        (pager.getChildAt(0) as? RecyclerView)?.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                swipeRight.onTouchEvent(e)
+                return false
+            }
+        })
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
                 wallpaperX = (position + positionOffset).coerceIn(0f, 1f)
@@ -537,7 +642,7 @@ class LauncherActivity : AppCompatActivity() {
 
             override fun onPageSelected(position: Int) {
                 val onTiles = position == LauncherPagerAdapter.PAGE_TILES
-                swapTitle(if (onTiles) "start" else "all apps")
+                swapTitle(if (onTiles) spaceName() else "all apps")
                 btnTogglePage.setImageResource(if (onTiles) R.drawable.ic_m_apps else R.drawable.ic_m_back)
                 btnTogglePage.contentDescription = if (onTiles) "All apps" else "Back to Start"
                 if (onTiles) {
@@ -625,11 +730,60 @@ class LauncherActivity : AppCompatActivity() {
                 return false
             }
         })
-        rv.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+        // Pinch in → overview; two fingers down → search (or the chosen action).
+        var pinchScale = 1f
+        val pinch = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                pinchScale = 1f
+                return true
+            }
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                pinchScale *= detector.scaleFactor
+                return true
+            }
+        })
+        var twoStartY = Float.NaN
+        var twoStartSpan = 0f
+        var multiHandled = false
+        fun avgY(e: MotionEvent) = (0 until e.pointerCount).map { e.getY(it) }.average().toFloat()
+        fun span(e: MotionEvent) = if (e.pointerCount < 2) 0f else kotlin.math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
+        fun multiTouch(e: MotionEvent) {
+            if (tileAdapter.editMode) return
+            pinch.onTouchEvent(e)
+            when (e.actionMasked) {
+                MotionEvent.ACTION_POINTER_DOWN -> if (e.pointerCount == 2) {
+                    twoStartY = avgY(e)
+                    twoStartSpan = span(e)
+                    multiHandled = false
+                }
+                MotionEvent.ACTION_MOVE -> if (e.pointerCount >= 2 && !multiHandled && !twoStartY.isNaN()) {
+                    val spanChange = span(e) - twoStartSpan
+                    if (pinchScale < 0.72f) {
+                        multiHandled = true
+                        runPinchGesture()
+                    } else if (avgY(e) - twoStartY > ui.dp(90) && abs(spanChange) < ui.dp(70)) {
+                        multiHandled = true
+                        runTwoFingerGesture()
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    twoStartY = Float.NaN
+                    pinchScale = 1f
+                }
+            }
+        }
+        rv.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
             override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
                 detector.onTouchEvent(e)
-                return false
+                multiTouch(e)
+                // Two fingers belong to the gestures, not to scrolling.
+                return e.pointerCount >= 2 && !tileAdapter.editMode
             }
+
+            override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) = multiTouch(e)
+
+            override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
         })
         rv.doOnLayout { playEntranceIfNeeded() }
     }
@@ -807,7 +961,7 @@ class LauncherActivity : AppCompatActivity() {
 
         override fun onFolderAppMenu(folder: TileItem, app: TileItem, anchor: View) = showFolderAppMenu(folder, app, anchor)
 
-        override fun onTileSwipe(tile: TileItem) = showTileNotifications(tile)
+        override fun onTileSwipe(tile: TileItem) = runSwipe(tile)
 
         override fun canCustomise(): Boolean = !prefs.layoutLocked
 
@@ -815,6 +969,29 @@ class LauncherActivity : AppCompatActivity() {
             root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             showLockedTileMenu(tile)
         }
+
+        override fun onToggle(tile: TileItem, id: String) {
+            when (val outcome = toggles.toggle(id)) {
+                is QuickToggles.Outcome.Done -> Unit
+                is QuickToggles.Outcome.Open -> {
+                    outcome.hint?.let { toast(it) }
+                    launchIntent(outcome.intent, null, Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+        }
+
+        override fun onFolderRename(folder: TileItem) = renameHolder(folder)
+
+        override fun appLabel(packageName: String): String =
+            allApps.firstOrNull { it.packageName == packageName }?.name ?: packageName.substringAfterLast('.')
+
+        override fun homePackages(): Set<String> = homeApps
+    }
+
+    /** Home screen apps on the phone, which screen time leaves out like Android does. */
+    private val homeApps: Set<String> by lazy {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        packageManager.queryIntentActivities(intent, 0).map { it.activityInfo.packageName }.toSet()
     }
 
     private val dragCallback = object : ItemTouchHelper.Callback() {
@@ -831,7 +1008,7 @@ class LauncherActivity : AppCompatActivity() {
         private fun canMerge(dragged: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
             val a = tileAdapter.tileAt(dragged.bindingAdapterPosition) ?: return false
             val b = tileAdapter.tileAt(target.bindingAdapterPosition) ?: return false
-            return a !== b && a.type == TileType.APP_SHORTCUT && (b.type == TileType.APP_SHORTCUT || b.type == TileType.FOLDER)
+            return a !== b && a.type == TileType.APP_SHORTCUT && (b.type == TileType.APP_SHORTCUT || b.holdsApps)
         }
 
         /** Dropping in the middle of a tile makes a folder; near its edges just moves past it. */
@@ -901,9 +1078,10 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun mergeIntoFolder(app: TileItem, target: TileItem) {
         if (app.type != TileType.APP_SHORTCUT || app === target) return
-        if (target.type == TileType.FOLDER) {
+        if (target.holdsApps) {
             tileAdapter.removeTile(app)
             target.children.add(app)
+            autoName(target)
             tileAdapter.refresh(target)
         } else if (target.type == TileType.APP_SHORTCUT) {
             val folder = TileItem(
@@ -914,11 +1092,40 @@ class LauncherActivity : AppCompatActivity() {
             )
             folder.children.add(target)
             folder.children.add(app)
+            folder.setFlag("autoName", prefs.folderAutoName)
+            autoName(folder)
             tileAdapter.replaceTile(target, folder)
             tileAdapter.removeTile(app)
-            toast("Folder made · tap ⋯ to name it")
+            toast("Folder “${folder.title}” made · tap its name to rename")
         }
         prefs.saveTiles(tiles)
+    }
+
+    /** Names a folder or stack after what its apps have in common, until the user renames it. */
+    private fun autoName(holder: TileItem) {
+        if (!holder.flag("autoName") || !prefs.folderAutoName) return
+        val fallback = if (holder.type == TileType.STACK) "Stack" else "Folder"
+        holder.title = AppCategories.nameFor(
+            holder.children.map { AppCategories.of(this, it.packageName, it.title) },
+            holder.children.map { it.title },
+            fallback
+        )
+    }
+
+    /** Rename a folder, stack or group, with name ideas from the apps inside. */
+    private fun renameHolder(tile: TileItem) {
+        val apps = if (tile.type == TileType.SECTION_HEADER) tileAdapter.groupMembers(tile).filter { it.type == TileType.APP_SHORTCUT } else tile.children
+        val ideas = AppCategories.suggestions(apps.map { AppCategories.of(this, it.packageName, it.title) })
+        val title = when (tile.type) {
+            TileType.SECTION_HEADER -> "Rename group"
+            TileType.STACK -> "Name stack"
+            else -> "Name folder"
+        }
+        prompt(title, tile.title, "Name", suggestions = ideas) { name ->
+            tile.title = name
+            tile.setFlag("autoName", false)
+            restyle(tile)
+        }
     }
 
     private fun removeFromFolder(folder: TileItem, app: TileItem) {
@@ -929,6 +1136,7 @@ class LauncherActivity : AppCompatActivity() {
             val last = folder.children.firstOrNull()
             if (last != null) tileAdapter.replaceTile(folder, last) else tileAdapter.removeTile(folder)
         } else {
+            autoName(folder)
             tileAdapter.refresh(folder)
         }
         tileAdapter.insertTile(app, index + 1)
@@ -1016,7 +1224,7 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun removeTilesFor(packageName: String) {
         tiles.filter { it.packageName == packageName && it.type == TileType.APP_SHORTCUT }.forEach { tileAdapter.removeTile(it) }
-        tiles.filter { it.type == TileType.FOLDER }.forEach { folder ->
+        tiles.filter { it.holdsApps }.forEach { folder ->
             folder.children.filter { it.packageName == packageName }.forEach { app ->
                 folder.children.remove(app)
             }
@@ -1063,9 +1271,39 @@ class LauncherActivity : AppCompatActivity() {
         when (tile.type) {
             TileType.APP_SHORTCUT -> openAppTile(tile, view)
             TileType.FOLDER -> {
-                val panel = tileAdapter.toggleFolder(tile)
-                if (panel >= 0) rvTiles?.postDelayed({ rvTiles?.smoothScrollToPosition(panel) }, 120)
+                val open = {
+                    val panel = tileAdapter.toggleFolder(tile)
+                    if (panel >= 0) rvTiles?.postDelayed({ rvTiles?.smoothScrollToPosition(panel) }, 120)
+                }
+                if (tile.flag("locked") && !unlockedFolders.contains(tile.id)) {
+                    authenticate(tile.title, "Unlock this folder") {
+                        unlockedFolders.add(tile.id)
+                        open()
+                    }
+                } else open()
             }
+            TileType.STACK -> tile.children.getOrNull(tile.stackIndex)?.let { openAppTile(it, view) }
+            TileType.SECTION_HEADER -> {
+                if (tileAdapter.groupMembers(tile).isNotEmpty()) {
+                    tileAdapter.toggleGroup(tile)
+                    prefs.saveTiles(tiles)
+                }
+            }
+            TileType.NOTE -> editNote(tile)
+            TileType.COUNTDOWN -> if (tile.extras["date"] == null) editCountdown(tile) else showCountdown(tile)
+            TileType.WORLD_CLOCK -> if (tile.extras["zone"].isNullOrEmpty()) pickCity(tile) else launchIntent(Intent(AlarmClock.ACTION_SHOW_ALARMS), view)
+            TileType.SCREEN_TIME -> if (!UsageReader.hasAccess(this)) requestUsageAccess() else showScreenTime()
+            TileType.DATA_USAGE -> if (!UsageReader.hasAccess(this)) requestUsageAccess()
+                else launchIntent(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) Intent(Settings.ACTION_DATA_USAGE_SETTINGS) else Intent(Settings.ACTION_WIRELESS_SETTINGS),
+                    view, Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                )
+            TileType.STEPS -> when {
+                !stepCounter.available -> toast("This phone has no step counter")
+                needsActivityPermission() -> activityPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                else -> editStepGoal()
+            }
+            TileType.TOGGLES -> Unit
             TileType.CLOCK_WEATHER -> launchIntent(Intent(AlarmClock.ACTION_SHOW_ALARMS), view)
             TileType.CALENDAR_BIG -> launchIntent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR), view)
             TileType.WEATHER_LIVE -> if (weather.hasLocation) showWeatherPanel() else showWeatherSetup()
@@ -1091,7 +1329,7 @@ class LauncherActivity : AppCompatActivity() {
                 if (TileMedia.photos(this, tile.id).isEmpty()) choosePhotos(tile)
                 else launchIntent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_GALLERY), view)
             }
-            TileType.WIDGET, TileType.SECTION_HEADER -> Unit
+            TileType.WIDGET -> Unit
         }
     }
 
@@ -1195,9 +1433,19 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun webSearch(query: String) {
-        val intent = Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query)
-        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(query)))
-        launchIntent(intent, null, fallback)
+        val base = when (prefs.searchEngine) {
+            "bing" -> "https://www.bing.com/search?q="
+            "duckduckgo" -> "https://duckduckgo.com/?q="
+            "brave" -> "https://search.brave.com/search?q="
+            "ecosia" -> "https://www.ecosia.org/search?q="
+            else -> "https://www.google.com/search?q="
+        }
+        val web = Intent(Intent.ACTION_VIEW, Uri.parse(base + Uri.encode(query)))
+        if (prefs.searchEngine == "google") {
+            launchIntent(Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query), null, web)
+        } else {
+            launchIntent(web, null)
+        }
     }
 
     private fun togglePage() {
@@ -1475,28 +1723,34 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     /** Asks for the phone's fingerprint, face or PIN before showing Private apps. */
-    private fun unlockPrivateApps() {
+    private fun unlockPrivateApps() = authenticate("Private apps", "Confirm it's you") { showPrivateApps() }
+
+    /** Fingerprint, face or screen lock check; [onSuccess] runs once it passes (or with no lock set). */
+    private fun authenticate(title: String, subtitle: String, onSuccess: () -> Unit) {
         val keyguard = getSystemService(KeyguardManager::class.java)
         if (keyguard == null || !keyguard.isDeviceSecure) {
-            showPrivateApps()
+            onSuccess()
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val prompt = BiometricPrompt.Builder(this)
-                .setTitle("Private apps")
-                .setSubtitle("Confirm it's you")
+                .setTitle(title)
+                .setSubtitle(subtitle)
                 .setAllowedAuthenticators(
                     BiometricManager.Authenticators.BIOMETRIC_WEAK or
                         BiometricManager.Authenticators.DEVICE_CREDENTIAL
                 )
                 .build()
             prompt.authenticate(CancellationSignal(), mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) = showPrivateApps()
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) = onSuccess()
             })
         } else {
             @Suppress("DEPRECATION")
-            val intent = keyguard.createConfirmDeviceCredentialIntent("Private apps", "Confirm it's you")
-            if (intent != null) privateUnlock.launch(intent) else showPrivateApps()
+            val intent = keyguard.createConfirmDeviceCredentialIntent(title, subtitle)
+            if (intent != null) {
+                afterUnlock = onSuccess
+                privateUnlock.launch(intent)
+            } else onSuccess()
         }
     }
 
@@ -1683,13 +1937,15 @@ class LauncherActivity : AppCompatActivity() {
                 toast("Start unlocked")
             })
         } else {
+            card.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Tidy, sort or group by kind") { showArrange() })
             card.addView(ui.action(R.drawable.ic_m_resize, "Customise Start", "Move, resize, recolour, make folders") {
                 metroOverlay.dismiss()
                 if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
                 tileAdapter.enterEditMode(tiles.firstOrNull()?.id)
             })
         }
-        card.addView(ui.action(R.drawable.ic_m_palette, "Accent colour") { settingsPage.show("colours") })
+        card.addView(ui.action(R.drawable.ic_m_overview, "Overview", "Spaces and groups · pinch Start") { showOverview() })
+        card.addView(ui.action(R.drawable.ic_m_palette, "Themes", "Change the whole look in one tap") { settingsPage.show("themes") })
         card.addView(ui.action(R.drawable.ic_m_settings, "Settings") { settingsPage.show() })
         metroOverlay.show(card, if (anchor != null) MetroOverlay.Style.POPUP else MetroOverlay.Style.SHEET, anchor)
     }
@@ -1720,8 +1976,12 @@ class LauncherActivity : AppCompatActivity() {
 
     /** The per-tile customisation menu: size, colour, name, live on/off and type-specific actions. */
     private fun showTileMenu(tile: TileItem) {
+        if (tile.type == TileType.SECTION_HEADER) {
+            showGroupMenu(tile)
+            return
+        }
         val card = ui.card()
-        val isHeader = tile.type == TileType.SECTION_HEADER
+        val isHeader = false
         card.addView(ui.header(tile.title.ifEmpty { "Tile" }, describe(tile)))
         if (!isHeader) {
             card.addView(ui.sectionTitle("Size"))
@@ -1739,6 +1999,37 @@ class LauncherActivity : AppCompatActivity() {
                     tile.accentColorHex = picked?.let { String.format("#%06X", 0xFFFFFF and it) }
                     restyle(tile)
                 })
+                card.addView(ui.sectionTitle("Look"))
+                val styles = listOf("", "solid", "glass", "clear")
+                card.addView(ui.chips(listOf("Like Start", "Solid", "Glass", "Clear"), styles.indexOf(tile.extras["style"].orEmpty()).coerceAtLeast(0)) { i ->
+                    if (styles[i].isEmpty()) tile.extras.remove("style") else tile.extras["style"] = styles[i]
+                    restyle(tile)
+                })
+                val hasCover = tile.extras["cover"] == "1"
+                card.addView(ui.action(R.drawable.ic_m_photo, if (hasCover) "Change tile picture" else "Tile picture", "Any photo as this tile's background") {
+                    metroOverlay.dismiss()
+                    pictureTarget = tile
+                    try {
+                        coverPicker.launch("image/*")
+                    } catch (_: ActivityNotFoundException) {
+                        toast("No photo picker on this phone")
+                    }
+                })
+                if (hasCover) {
+                    if (tile.type == TileType.APP_SHORTCUT) {
+                        card.addView(ui.toggleRow("Icon on the picture", null, tile.extras["coverIcon"] != "0") { on ->
+                            if (on) tile.extras.remove("coverIcon") else tile.extras["coverIcon"] = "0"
+                            restyle(tile)
+                        })
+                    }
+                    card.addView(ui.action(R.drawable.ic_m_close, "Remove tile picture") {
+                        metroOverlay.dismiss()
+                        tile.extras.remove("cover")
+                        tile.extras.remove("coverIcon")
+                        TileMedia.deleteCover(this, tile.id)
+                        restyle(tile)
+                    })
+                }
             }
             card.addView(ui.divider())
         }
@@ -1746,11 +2037,12 @@ class LauncherActivity : AppCompatActivity() {
 
         if (tile.type != TileType.WIDGET) {
             card.addView(ui.action(R.drawable.ic_m_edit, when (tile.type) {
-                TileType.SECTION_HEADER -> "Rename group"
                 TileType.FOLDER -> "Name folder"
+                TileType.STACK -> "Name stack"
                 else -> "Rename"
             }) {
-                prompt(if (isHeader) "Rename group" else "Rename tile", tile.title, "Name") { name ->
+                if (tile.holdsApps) renameHolder(tile)
+                else prompt("Rename tile", tile.title, "Name") { name ->
                     tile.title = name
                     restyle(tile)
                 }
@@ -1770,6 +2062,37 @@ class LauncherActivity : AppCompatActivity() {
                 showTileNotifications(tile)
             })
         }
+        if (tile.type == TileType.APP_SHORTCUT || tile.type == TileType.FOLDER) {
+            card.addView(ui.action(R.drawable.ic_m_swipe, "Swipe across the tile", swipeLabel(tile)) { chooseSwipe(tile) })
+        }
+        when (tile.type) {
+            TileType.STACK -> {
+                card.addView(ui.action(R.drawable.ic_m_stack, "Apps in this stack", tile.children.joinToString(", ") { it.title }) { editStackApps(tile) })
+                card.addView(ui.toggleRow("Smart rotation", "Opens on the app you're likely to want now", !tile.flag("manual")) { on ->
+                    tile.setFlag("manual", !on)
+                    prefs.saveTiles(tiles)
+                })
+                card.addView(ui.action(R.drawable.ic_m_folder, "Turn into a folder") { metroOverlay.dismiss(); convertHolder(tile) })
+            }
+            TileType.NOTE -> card.addView(ui.action(R.drawable.ic_m_note, "Edit note") { metroOverlay.dismiss(); editNote(tile) })
+            TileType.COUNTDOWN -> {
+                card.addView(ui.action(R.drawable.ic_m_event, "Change date") { metroOverlay.dismiss(); editCountdown(tile) })
+                card.addView(ui.toggleRow("Every year", "For birthdays and anniversaries", tile.flag("yearly")) { on ->
+                    tile.setFlag("yearly", on)
+                    restyle(tile)
+                })
+            }
+            TileType.WORLD_CLOCK -> card.addView(ui.action(R.drawable.ic_m_globe, "Change city") { metroOverlay.dismiss(); pickCity(tile) })
+            TileType.TOGGLES -> card.addView(ui.action(R.drawable.ic_m_toggles, "Choose switches") { metroOverlay.dismiss(); chooseToggles(tile) })
+            TileType.STEPS -> card.addView(ui.action(R.drawable.ic_m_walk, "Daily goal", "${prefs.stepGoal} steps") { metroOverlay.dismiss(); editStepGoal() })
+            TileType.SCREEN_TIME, TileType.DATA_USAGE -> if (!UsageReader.hasAccess(this)) {
+                card.addView(ui.action(R.drawable.ic_m_lock, "Allow usage access") { metroOverlay.dismiss(); requestUsageAccess() })
+            }
+            else -> Unit
+        }
+        if (prefs.spaces().size > 1) {
+            card.addView(ui.action(R.drawable.ic_m_spaces, "Move to another space") { moveToSpace(tile) })
+        }
         when (tile.type) {
             TileType.APP_SHORTCUT -> {
                 card.addView(ui.action(R.drawable.ic_m_folder, "Add to a folder") { showFolderPicker(tile) })
@@ -1778,10 +2101,27 @@ class LauncherActivity : AppCompatActivity() {
                     card.addView(ui.action(R.drawable.ic_m_delete, "Uninstall", danger = true) { metroOverlay.dismiss(); uninstall(pkg) })
                 }
             }
-            TileType.FOLDER -> card.addView(ui.action(R.drawable.ic_m_apps, "Ungroup", "Put the apps back on Start") {
-                metroOverlay.dismiss()
-                ungroup(tile)
-            })
+            TileType.FOLDER -> {
+                card.addView(ui.toggleRow("Lock folder", "Fingerprint, face or PIN to open; its apps stay hidden", tile.flag("locked")) { on ->
+                    if (on) {
+                        tile.setFlag("locked", true)
+                        unlockedFolders.remove(tile.id)
+                        restyle(tile)
+                    } else {
+                        // Turning the lock off needs the lock too.
+                        metroOverlay.dismiss()
+                        authenticate(tile.title, "Remove the folder lock") {
+                            tile.setFlag("locked", false)
+                            restyle(tile)
+                        }
+                    }
+                })
+                card.addView(ui.action(R.drawable.ic_m_stack, "Turn into an app stack", "The apps take turns in one tile") { metroOverlay.dismiss(); convertHolder(tile) })
+                card.addView(ui.action(R.drawable.ic_m_apps, "Ungroup", "Put the apps back on Start") {
+                    metroOverlay.dismiss()
+                    ungroup(tile)
+                })
+            }
             TileType.PHOTOS -> card.addView(ui.action(R.drawable.ic_m_photo, "Choose photos") { metroOverlay.dismiss(); choosePhotos(tile) })
             TileType.QUICK_CONTACT -> card.addView(ui.action(R.drawable.ic_m_photo, "Choose photo") {
                 metroOverlay.dismiss()
@@ -1802,15 +2142,17 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun hasLiveFace(tile: TileItem) = when (tile.type) {
         TileType.APP_SHORTCUT -> tile.shortcutId == null
-        TileType.CLOCK_WEATHER, TileType.CALENDAR_BIG, TileType.BATTERY_STATUS,
-        TileType.STORAGE_STATS, TileType.QUICK_CONTACT, TileType.PHOTOS -> true
+        TileType.CLOCK_WEATHER, TileType.CALENDAR_BIG, TileType.BATTERY_STATUS, TileType.STACK,
+        TileType.STORAGE_STATS, TileType.QUICK_CONTACT, TileType.PHOTOS, TileType.COUNTDOWN,
+        TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS -> true
         else -> false
     }
 
     private fun describe(tile: TileItem): String = when (tile.type) {
         TileType.APP_SHORTCUT -> if (tile.shortcutId != null) "Shortcut · ${tile.size.label}" else "App · ${tile.size.label}"
         TileType.SECTION_HEADER -> "Group name"
-        TileType.FOLDER -> "Folder · ${tile.children.size} apps"
+        TileType.FOLDER -> "Folder · ${tile.children.size} apps" + if (tile.flag("locked")) " · locked" else ""
+        TileType.STACK -> "App stack · ${tile.children.size} apps · ${tile.size.label}"
         TileType.WIDGET -> "Widget · ${tile.size.label}"
         TileType.QUICK_CONTACT -> listOf("Person", tile.contactPhone).filter { it.isNotEmpty() }.joinToString(" · ")
         else -> "${tile.title} · ${tile.size.label}"
@@ -1820,9 +2162,9 @@ class LauncherActivity : AppCompatActivity() {
     private fun showFolderPicker(app: TileItem) {
         val card = ui.card()
         card.addView(ui.header("Add ${app.title} to…"))
-        val folders = tiles.filter { it.type == TileType.FOLDER }
+        val folders = tiles.filter { it.holdsApps }
         folders.forEach { folder ->
-            card.addView(ui.action(R.drawable.ic_m_folder, folder.title, "${folder.children.size} apps") {
+            card.addView(ui.action(if (folder.type == TileType.STACK) R.drawable.ic_m_stack else R.drawable.ic_m_folder, folder.title, "${folder.children.size} apps") {
                 metroOverlay.dismiss()
                 mergeIntoFolder(app, folder)
             })
@@ -1845,7 +2187,7 @@ class LauncherActivity : AppCompatActivity() {
         val card = ui.card()
         card.addView(ui.header(app.title, "In ${folder.title}"))
         if (app.shortcutId == null) app.packageName?.let { addShortcutRows(card, it) }
-        card.addView(ui.action(R.drawable.ic_m_move_out, "Move out of folder") {
+        card.addView(ui.action(R.drawable.ic_m_move_out, if (folder.type == TileType.STACK) "Move out of stack" else "Move out of folder") {
             metroOverlay.dismiss()
             removeFromFolder(folder, app)
         })
@@ -1905,7 +2247,39 @@ class LauncherActivity : AppCompatActivity() {
             if (type == TileType.CALENDAR_BIG) refreshAgenda()
         }
         add(R.drawable.ic_m_apps, "App", "Pin any installed app") { showAppPicker() }
+        add(R.drawable.ic_m_stack, "App stack", "Several apps in one tile that take turns") { createStack() }
         add(R.drawable.ic_m_widgets, "Widget", "Any Android widget, inside a tile") { showWidgetPicker() }
+        add(R.drawable.ic_m_toggles, "Switches", "Torch, Wi-Fi, Bluetooth, sound, Do not disturb") { tile(TileType.TOGGLES, "Switches", TileSize.MEDIUM) }
+        add(R.drawable.ic_m_note, "Note", "A sticky note on Start") {
+            metroOverlay.dismiss()
+            val note = TileItem(UUID.randomUUID().toString(), TileType.NOTE, "Note", size = TileSize.MEDIUM, accentColorHex = "#F0A30A")
+            addTile(note)
+            editNote(note)
+        }
+        add(R.drawable.ic_m_event, "Countdown", "Days until a birthday, trip or exam") {
+            metroOverlay.dismiss()
+            val c = TileItem(UUID.randomUUID().toString(), TileType.COUNTDOWN, "Countdown", size = TileSize.MEDIUM)
+            addTile(c)
+            editCountdown(c)
+        }
+        add(R.drawable.ic_m_globe, "World clock", "The time in another city") {
+            metroOverlay.dismiss()
+            val c = TileItem(UUID.randomUUID().toString(), TileType.WORLD_CLOCK, "World clock", size = TileSize.MEDIUM)
+            addTile(c)
+            pickCity(c)
+        }
+        add(R.drawable.ic_m_phone_time, "Screen time", "Today's use and most used apps") {
+            tile(TileType.SCREEN_TIME, "Screen time", TileSize.MEDIUM)
+            if (!UsageReader.hasAccess(this)) requestUsageAccess()
+        }
+        add(R.drawable.ic_m_data_usage, "Data usage", "Mobile and Wi-Fi data this month") {
+            tile(TileType.DATA_USAGE, "Data usage", TileSize.MEDIUM)
+            if (!UsageReader.hasAccess(this)) requestUsageAccess()
+        }
+        if (stepCounter.available) add(R.drawable.ic_m_walk, "Steps", "Today's steps toward your goal") {
+            tile(TileType.STEPS, "Steps", TileSize.MEDIUM)
+            if (needsActivityPermission()) activityPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION) else stepCounter.start()
+        }
         add(R.drawable.ic_m_person, "Person", "Call a contact in one tap") { metroOverlay.dismiss(); pickContact() }
         add(R.drawable.ic_m_photo, "Photos", "A live slideshow of photos you pick") {
             metroOverlay.dismiss()
@@ -1923,11 +2297,7 @@ class LauncherActivity : AppCompatActivity() {
         add(R.drawable.ic_m_search, "Search", "Apps, maths and web") { tile(TileType.EXPRESS_SEARCH, "Search", TileSize.WIDE) }
         add(R.drawable.ic_m_keyboard, "Keyboard settings", "Themes and layouts") { tile(TileType.KEYBOARD_SETTINGS, "Keyboard", TileSize.SMALL, "Themes & layouts") }
         add(R.drawable.ic_m_settings, "Phone settings", "Android settings") { tile(TileType.DEVICE_SETTINGS, "Settings", TileSize.SMALL) }
-        add(R.drawable.ic_m_title, "Group name", "Start a new named group of tiles") {
-            prompt("Name this group", "", "e.g. Work, Games") { name ->
-                addTile(TileItem(UUID.randomUUID().toString(), TileType.SECTION_HEADER, name, size = TileSize.WIDE))
-            }
-        }
+        add(R.drawable.ic_m_title, "Group name", "Start a new named group of tiles") { newGroup() }
         metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
     }
 
@@ -2098,12 +2468,46 @@ class LauncherActivity : AppCompatActivity() {
             }
         }
         override fun openKeyboardSettings() = startActivity(Intent(this@LauncherActivity, MainActivity::class.java))
-        override fun exportBackup() = backupWriter.launch("start-backup.json")
-        override fun importBackup() = backupReader.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+        override fun exportBackup() = backupWriter.launch("start-backup.zip")
+        override fun importBackup() = backupReader.launch(arrayOf("application/zip", "application/json", "text/plain", "application/octet-stream"))
         override fun confirmReset() = this@LauncherActivity.confirmReset()
         override fun showWeatherSetup() = this@LauncherActivity.showWeatherSetup()
         override fun applyWallpaperAccent() = this@LauncherActivity.applyWallpaperAccent()
         override fun showPrivateApps() = unlockPrivateApps()
+        override fun showOverview() = this@LauncherActivity.showOverview()
+        override fun showArrange() = this@LauncherActivity.showArrange()
+        override fun addSpace() = this@LauncherActivity.addSpace()
+        override fun saveCurrentTheme() {
+            prompt("Save this look", "", "Theme name", suggestions = listOf("My look", "Night", "Work", "Bright")) { name ->
+                MetroThemes.save(prefs, MetroThemes.current(prefs, name))
+                toast("Saved “$name”")
+                settingsPage.show("themes", animate = false)
+            }
+        }
+        override fun exportTheme(theme: MetroThemes.Theme) {
+            pendingThemeExport = theme
+            themeWriter.launch("${theme.name.replace(Regex("[^A-Za-z0-9 _-]"), "").ifEmpty { "theme" }}.json")
+        }
+        override fun importTheme() = themeReader.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+        override fun requestUsageAccess() = this@LauncherActivity.requestUsageAccess()
+        override fun requestActivityAccess() {
+            if (needsActivityPermission()) activityPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION) else openAppInfo(packageName)
+        }
+        override fun openScreenSaverSettings() {
+            try {
+                startActivity(Intent(Settings.ACTION_DREAM_SETTINGS))
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+            }
+        }
+        override fun backupNow() {
+            prefs.saveTiles(tiles)
+            android.app.backup.BackupManager(this@LauncherActivity).dataChanged()
+            toast("Android will include Start in your next phone backup")
+        }
+        override val spaceCount: Int get() = prefs.spaces().size
+        override val usageAccess: Boolean get() = UsageReader.hasAccess(this@LauncherActivity)
+        override val activityAccess: Boolean get() = !needsActivityPermission()
         override fun applyDrawerSettings() {
             rvDrawer?.let { applyDrawerLayout(it) }
             refreshDrawer()
@@ -2199,23 +2603,49 @@ class LauncherActivity : AppCompatActivity() {
         metroOverlay.show(card, MetroOverlay.Style.DIALOG)
     }
 
-    private fun prompt(title: String, initial: String, hint: String, onSave: (String) -> Unit) {
+    private fun prompt(
+        title: String,
+        initial: String,
+        hint: String,
+        suggestions: List<String> = emptyList(),
+        multiline: Boolean = false,
+        allowEmpty: Boolean = false,
+        onSave: (String) -> Unit
+    ) {
         val card = ui.card().apply { setPadding(ui.dp(20), ui.dp(16), ui.dp(20), ui.dp(16)) }
         card.addView(ui.text(title, 22f, face = lightFace))
         val input = ui.input(initial, hint)
+        if (multiline) {
+            input.isSingleLine = false
+            input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            input.minLines = 4
+            input.maxLines = 10
+            input.gravity = Gravity.TOP or Gravity.START
+        }
         card.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = ui.dp(12)
-            bottomMargin = ui.dp(16)
+            bottomMargin = if (suggestions.isEmpty()) ui.dp(16) else ui.dp(4)
         })
+        if (suggestions.isNotEmpty()) {
+            // One-tap name ideas.
+            card.addView(ui.chips(suggestions, suggestions.indexOf(initial)) { i ->
+                input.setText(suggestions[i])
+                input.setSelection(input.text.length)
+            }.apply { setPadding(0, 0, 0, ui.dp(8)) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = -ui.dp(16)
+                marginEnd = -ui.dp(16)
+            })
+        }
         val save = {
             val value = input.text.toString().trim()
-            if (value.isNotEmpty()) {
+            if (value.isNotEmpty() || allowEmpty) {
                 hideKeyboard(input)
                 metroOverlay.dismiss()
                 onSave(value)
             }
         }
-        input.setOnEditorActionListener { _, _, _ ->
+        if (!multiline) input.setOnEditorActionListener { _, _, _ ->
             save()
             true
         }
@@ -2270,6 +2700,684 @@ class LauncherActivity : AppCompatActivity() {
         }
     }
 
+    // ── Custom tiles: notes, countdowns, world clocks, toggles, steps, screen time ──────
+
+    private fun editNote(tile: TileItem) {
+        prompt("Note", tile.extras["text"].orEmpty(), "Write something", multiline = true, allowEmpty = true) { text ->
+            if (text.isEmpty()) tile.extras.remove("text") else tile.extras["text"] = text
+            restyle(tile)
+        }
+    }
+
+    /** Pick the date, then what it is. Birthdays and anniversaries repeat every year. */
+    private fun editCountdown(tile: TileItem) {
+        val current = Countdown.parse(tile.extras["date"]) ?: Calendar.getInstance()
+        DatePickerDialog(this, android.R.style.Theme_Material_Dialog, { _, y, m, d ->
+            val picked = Calendar.getInstance().apply { clear(); set(y, m, d) }
+            tile.extras["date"] = Countdown.format(picked)
+            val ideas = listOf("Birthday", "Holiday", "Trip", "Exam", "Anniversary", "Wedding")
+            prompt("What's the day?", tile.title.takeIf { it != "Countdown" }.orEmpty(), "e.g. Holiday", suggestions = ideas) { name ->
+                tile.title = name
+                if (name.contains("birthday", true) || name.contains("anniversary", true)) tile.setFlag("yearly", true)
+                restyle(tile)
+            }
+            restyle(tile)
+        }, current.get(Calendar.YEAR), current.get(Calendar.MONTH), current.get(Calendar.DAY_OF_MONTH)).show()
+    }
+
+    private fun showCountdown(tile: TileItem) {
+        val card = ui.card()
+        val target = Countdown.parse(tile.extras["date"])
+        val today = Calendar.getInstance()
+        val date = target?.let { if (tile.flag("yearly")) Countdown.nextYearly(today, it.get(Calendar.MONTH), it.get(Calendar.DAY_OF_MONTH)) else it }
+        val days = date?.let { Countdown.daysBetween(today, it) }
+        card.addView(ui.header(tile.title, date?.let { DateFormat.format("EEEE, d MMMM yyyy", it).toString() }))
+        if (days != null) {
+            card.addView(ui.text(if (days == 0) "Today" else "${abs(days)} ${if (abs(days) == 1) "day" else "days"}", 48f, face = lightFace).apply {
+                setPadding(ui.dp(20), 0, ui.dp(20), 0)
+            })
+            card.addView(ui.caption(Countdown.describe(days)))
+        }
+        card.addView(ui.action(R.drawable.ic_m_event, "Change date") { metroOverlay.dismiss(); editCountdown(tile) })
+        card.addView(ui.action(R.drawable.ic_m_edit, "Rename") {
+            prompt("Rename", tile.title, "Name") { tile.title = it; restyle(tile) }
+        })
+        card.addView(ui.toggleRow("Every year", "For birthdays and anniversaries", tile.flag("yearly")) { on ->
+            tile.setFlag("yearly", on)
+            restyle(tile)
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    /** City search for a world clock tile. */
+    private fun pickCity(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header("Choose a city", "Every time zone on the phone"))
+        val input = ui.input("", "City or country region")
+        card.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(ui.dp(16), 0, ui.dp(16), ui.dp(8))
+        })
+        val results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply { addView(results) }
+        card.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.45f).toInt()))
+        val cities = WorldClocks.cities()
+        fun show(q: String) {
+            results.removeAllViews()
+            val query = q.trim().lowercase()
+            cities.filter { query.isEmpty() || it.name.lowercase().contains(query) || it.region.lowercase().contains(query) }
+                .take(40)
+                .forEach { city ->
+                    results.addView(ui.action(R.drawable.ic_m_globe, city.name, "${city.region} · ${WorldClocks.offsetLabel(city.zoneId)}") {
+                        hideKeyboard(input)
+                        metroOverlay.dismiss()
+                        tile.extras["zone"] = city.zoneId
+                        tile.title = city.name
+                        restyle(tile)
+                    })
+                }
+        }
+        show("")
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) = show(s?.toString().orEmpty())
+        })
+        metroOverlay.show(card, MetroOverlay.Style.SHEET) { hideKeyboard(input) }
+    }
+
+    private fun chooseToggles(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header("Switches", "Pick what this tile shows; a bigger tile fits more"))
+        val chosen = (tile.extras["toggles"]?.split(',') ?: QuickToggles.defaults).toMutableList()
+        QuickToggles.all.forEach { t ->
+            card.addView(ui.toggleRow(t.label, null, t.id in chosen) { on ->
+                if (on) chosen.add(t.id) else chosen.remove(t.id)
+                // Keep the order of the master list so tiles look tidy.
+                tile.extras["toggles"] = QuickToggles.all.map { it.id }.filter { it in chosen }.joinToString(",")
+                restyle(tile)
+            })
+        }
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun editStepGoal() {
+        val card = ui.card()
+        card.addView(ui.header("Steps", stepCounter.today?.let { "${String.format("%,d", it)} steps today" }))
+        card.addView(ui.sectionTitle("Daily goal"))
+        val goals = listOf(5000, 8000, 10000, 12000, 15000)
+        card.addView(ui.chips(goals.map { "${it / 1000}k" }, goals.indexOf(prefs.stepGoal)) { i ->
+            prefs.stepGoal = goals[i]
+            tileAdapter.onStepsChanged()
+        })
+        card.addView(ui.caption("Counted by the phone's step sensor, on this phone only."))
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun needsActivityPermission(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private fun requestUsageAccess() {
+        try {
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            toast("Turn on usage access for ${getString(R.string.app_name)}")
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        }
+    }
+
+    private fun showScreenTime() {
+        val st = UsageReader.screenTime
+        val card = ui.card()
+        card.addView(ui.header("Screen time today", st?.let { listOfNotNull(UsageReader.formatDuration(it.totalMs), if (it.unlocks > 0) "${it.unlocks} unlocks" else null).joinToString(" · ") } ?: "Reading…"))
+        st?.top?.forEach { (pkg, ms) ->
+            card.addView(ui.actionWithIcon(icons.icon(pkg), tileCallbacks.appLabel(pkg), UsageReader.formatDuration(ms)) {
+                metroOverlay.dismiss()
+                launchApp(pkg, null)
+            })
+        }
+        card.addView(ui.caption("From Android's own usage records, read on this phone."))
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    // ── App stacks ──────────────────────────────────────────────────────────────────────
+
+    /** Multi-select app picker used for stacks. */
+    private fun pickApps(title: String, initial: List<String>, max: Int, onDone: (List<AppLauncherHelper.AppEntry>) -> Unit) {
+        val chosen = LinkedHashSet(initial)
+        val card = ui.card()
+        val header = ui.header(title, "${chosen.size} chosen · up to $max")
+        card.addView(header)
+        val filter = ui.input("", "Search apps")
+        card.addView(filter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(ui.dp(16), 0, ui.dp(16), ui.dp(8))
+        })
+        lateinit var picker: AppDrawerAdapter
+        picker = AppDrawerAdapter(
+            icons = icons,
+            accent = { prefs.accentColorInt },
+            tiltEnabled = { false },
+            isPinned = { pkg -> pkg in chosen },
+            onAppClick = { app, _ ->
+                if (!chosen.remove(app.packageName)) {
+                    if (chosen.size >= max) toast("A stack holds up to $max apps") else chosen.add(app.packageName)
+                }
+                ((header as LinearLayout).getChildAt(1) as? TextView)?.text = "${chosen.size} chosen · up to $max"
+                picker.notifyDataSetChanged()
+            },
+            markIcon = R.drawable.ic_m_check
+        )
+        val list = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@LauncherActivity)
+            adapter = picker
+        }
+        card.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.5f).toInt()))
+        picker.submit(visibleApps(), grouped = false)
+        filter.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val q = s?.toString().orEmpty()
+                picker.submit(if (q.isBlank()) visibleApps() else rankApps(q), grouped = false)
+            }
+        })
+        card.addView(LinearLayout(this).apply {
+            setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(4))
+            addView(buttonRow(
+                ui.button("Cancel", filled = false) { hideKeyboard(filter); metroOverlay.dismiss() },
+                ui.button("Done", filled = true) {
+                    hideKeyboard(filter)
+                    metroOverlay.dismiss()
+                    onDone(chosen.mapNotNull { pkg -> allApps.firstOrNull { it.packageName == pkg } })
+                }
+            ), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        })
+        metroOverlay.show(card, MetroOverlay.Style.SHEET) { hideKeyboard(filter) }
+    }
+
+    private fun createStack() {
+        pickApps("New app stack", emptyList(), 8) { apps ->
+            if (apps.size < 2) {
+                if (apps.isNotEmpty()) toast("Pick at least two apps")
+                return@pickApps
+            }
+            val stack = TileItem(UUID.randomUUID().toString(), TileType.STACK, "Stack", size = TileSize.MEDIUM)
+            apps.forEach { stack.children.add(TileItem(UUID.randomUUID().toString(), TileType.APP_SHORTCUT, it.name, it.packageName)) }
+            stack.setFlag("autoName", prefs.folderAutoName)
+            autoName(stack)
+            addTile(stack)
+            toast("Swipe across the stack to switch apps")
+        }
+    }
+
+    private fun editStackApps(stack: TileItem) {
+        pickApps("Apps in ${stack.title}", stack.children.mapNotNull { it.packageName }, 8) { apps ->
+            if (apps.size < 2) {
+                toast("A stack needs at least two apps")
+                return@pickApps
+            }
+            val keep = stack.children.associateBy { it.packageName }
+            stack.children.clear()
+            apps.forEach { app -> stack.children.add(keep[app.packageName] ?: TileItem(UUID.randomUUID().toString(), TileType.APP_SHORTCUT, app.name, app.packageName)) }
+            stack.stackIndex = 0
+            autoName(stack)
+            restyle(stack)
+            drawerAdapter.notifyDataSetChanged()
+        }
+    }
+
+    /** Folder ↔ stack: same apps, other way of showing them. */
+    private fun convertHolder(tile: TileItem) {
+        val toStack = tile.type == TileType.FOLDER
+        val other = tile.copy(
+            id = UUID.randomUUID().toString(),
+            type = if (toStack) TileType.STACK else TileType.FOLDER,
+            children = tile.children.toMutableList(),
+            extras = tile.extras.toMutableMap()
+        )
+        if (toStack) other.extras.remove("locked")
+        tileAdapter.replaceTile(tile, other)
+        prefs.saveTiles(tiles)
+    }
+
+    /** Smart stack choice: an app with new messages, else the one you use most at this hour. */
+    private fun stackPick(stack: TileItem): Int {
+        val kids = stack.children
+        kids.indexOfFirst { (NotificationHub.get(it.packageName)?.count ?: 0) > 0 }.takeIf { it >= 0 }?.let { return it }
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val usage = prefs.hourlyUsage()
+        val scores = kids.map { k -> usage[k.packageName]?.let { b -> b[hour] * 3 + b[(hour + 23) % 24] + b[(hour + 1) % 24] } ?: 0 }
+        val best = scores.indices.maxByOrNull { scores[it] } ?: return -1
+        return if (scores[best] > 0) best else -1
+    }
+
+    // ── Spaces ──────────────────────────────────────────────────────────────────────────
+
+    private fun spaceName(): String = prefs.spaces().firstOrNull { it.id == prefs.currentSpace }?.name ?: "start"
+
+    /** Switches Start to another space, sliding the old tiles out and the new ones in. */
+    private fun switchSpace(id: String, direction: Int = 1) {
+        if (id == prefs.currentSpace || prefs.spaces().none { it.id == id }) return
+        tileAdapter.exitEditMode()
+        tileAdapter.closeFolder()
+        prefs.saveTiles(tiles)
+        val rv = rvTiles
+        val swap = {
+            prefs.currentSpace = id
+            tiles.clear()
+            tiles.addAll(prefs.loadTiles())
+            // Apps uninstalled while this space wasn't showing.
+            tiles.removeAll { it.type == TileType.APP_SHORTCUT && it.packageName != null && appHelper.launchIntentFor(it.packageName!!) == null }
+            tileAdapter.notifyDataSetChanged()
+            rv?.scrollToPosition(0)
+            swapTitle(spaceName())
+            refreshAgenda()
+            refreshWeather(force = false)
+            tileAdapter.tick()
+            drawerAdapter.notifyDataSetChanged()
+            rv?.let { r ->
+                r.translationX = direction * r.width * 0.25f
+                r.alpha = 0f
+                r.animate().translationX(0f).alpha(1f).setStartDelay(0).setDuration(260).setInterpolator(DecelerateInterpolator(2f)).start()
+            }
+        }
+        if (rv != null && prefs.animationsEnabled) {
+            rv.animate().translationX(-direction * rv.width * 0.25f).alpha(0f).setStartDelay(0).setDuration(150).withEndAction { swap() }.start()
+        } else swap()
+    }
+
+    private fun nextSpace() {
+        val spaces = prefs.spaces()
+        if (spaces.size < 2) {
+            toast("Make another space in Overview to swipe between them")
+            return
+        }
+        val i = spaces.indexOfFirst { it.id == prefs.currentSpace }
+        switchSpace(spaces[(i + 1) % spaces.size].id)
+    }
+
+    private fun addSpace() {
+        prompt("New space", "", "e.g. Work, Home, Games", suggestions = listOf("Work", "Home", "Games", "Weekend", "Travel")) { name ->
+            val id = UUID.randomUUID().toString().take(8)
+            prefs.saveSpaces(prefs.spaces() + TilePreferences.Space(id, name.lowercase()))
+            switchSpace(id)
+            toast("Space “$name” made · add tiles to it")
+        }
+    }
+
+    private fun showSpaceMenu(space: TilePreferences.Space) {
+        val card = ui.card()
+        card.addView(ui.header(space.name, "Space"))
+        card.addView(ui.action(R.drawable.ic_m_edit, "Rename") {
+            prompt("Rename space", space.name, "Name") { name ->
+                prefs.saveSpaces(prefs.spaces().map { if (it.id == space.id) it.copy(name = name.lowercase()) else it })
+                if (space.id == prefs.currentSpace) swapTitle(spaceName())
+            }
+        })
+        if (space.id != TilePreferences.MAIN_SPACE) {
+            card.addView(ui.action(R.drawable.ic_m_delete, "Delete space", "Its tiles are removed", danger = true) {
+                metroOverlay.dismiss()
+                if (prefs.currentSpace == space.id) switchSpace(TilePreferences.MAIN_SPACE, -1)
+                prefs.tilesOf(space.id).forEach { t ->
+                    if (t.type == TileType.WIDGET) widgets.delete(t.appWidgetId)
+                    TileMedia.deleteTile(this, t.id)
+                }
+                prefs.deleteSpaceTiles(space.id)
+                prefs.saveSpaces(prefs.spaces().filter { it.id != space.id })
+                toast("Space deleted")
+            })
+        }
+        metroOverlay.show(card, MetroOverlay.Style.SHEET)
+    }
+
+    private fun moveToSpace(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header("Move ${tile.title.ifEmpty { "tile" }} to…"))
+        prefs.spaces().filter { it.id != prefs.currentSpace }.forEach { space ->
+            card.addView(ui.action(R.drawable.ic_m_spaces, space.name) {
+                metroOverlay.dismiss()
+                tileAdapter.removeTile(tile)
+                prefs.saveTiles(tiles)
+                prefs.saveTilesOf(space.id, prefs.tilesOf(space.id) + tile)
+                drawerAdapter.notifyDataSetChanged()
+                toast("Moved to ${space.name}")
+            })
+        }
+        metroOverlay.show(card, MetroOverlay.Style.SHEET)
+    }
+
+    // ── Overview (pinch or tap the title): spaces and groups at a glance ────────────────
+
+    private fun showOverview() {
+        tileAdapter.exitEditMode()
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, ui.dp(8), 0, ui.dp(32))
+        }
+        page.addView(ui.pageTitle("overview"))
+        page.addView(ui.sectionTitle("Spaces"))
+        val spaces = prefs.spaces()
+        val spaceRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(ui.dp(16), 0, ui.dp(16), 0)
+        }
+        spaces.forEach { space ->
+            val current = space.id == prefs.currentSpace
+            val count = if (current) tiles.size else prefs.tilesOf(space.id).size
+            spaceRow.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(10))
+                background = GradientDrawable().apply {
+                    cornerRadius = ui.dp(8).toFloat()
+                    if (current) setColor(prefs.accentColorInt) else {
+                        setColor(0x14FFFFFF)
+                        setStroke(ui.dp(1), 0x33FFFFFF)
+                    }
+                }
+                addView(ui.text(space.name, 17f, face = lightFace))
+                addView(ui.text("$count tiles", 12f, 0xB3FFFFFF.toInt()))
+                setOnClickListener {
+                    metroOverlay.dismiss()
+                    switchSpace(space.id)
+                }
+                setOnLongClickListener {
+                    showSpaceMenu(space)
+                    true
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ui.dp(8) })
+        }
+        spaceRow.addView(ui.button("+ New", filled = false) { addSpace() })
+        page.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(spaceRow)
+        })
+        page.addView(ui.caption("Swipe right on Start to go to the next space. Long-press a space to rename it."))
+
+        page.addView(ui.sectionTitle("Groups"))
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(14), 0, ui.dp(14), 0)
+        }
+        val cells = ArrayList<View>()
+        StartArranger.segments(tiles).chunked(2).forEach { pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair.forEach { seg ->
+                val name = seg.header?.title ?: spaceName()
+                val folded = seg.header?.flag("collapsed") == true
+                val cell = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(10))
+                    minimumHeight = ui.dp(96)
+                    background = GradientDrawable().apply {
+                        cornerRadius = (prefs.cornerRadiusDp * resources.displayMetrics.density)
+                        setColor(Color.argb(prefs.tileOpacity.coerceIn(30, 100) * 255 / 100, Color.red(prefs.accentColorInt), Color.green(prefs.accentColorInt), Color.blue(prefs.accentColorInt)))
+                    }
+                    // A row of the group's first app icons.
+                    val iconsRow = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                    seg.tiles.flatMap { if (it.holdsApps) it.children else listOf(it) }.filter { it.packageName != null }.take(4).forEach { t ->
+                        iconsRow.addView(ImageView(this@LauncherActivity).apply {
+                            icons.iconAsync(t.packageName, false) { d, _ -> setImageDrawable(d) }
+                        }, LinearLayout.LayoutParams(ui.dp(22), ui.dp(22)).apply { marginEnd = ui.dp(6) })
+                    }
+                    addView(iconsRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, 0, 1f))
+                    addView(ui.text(name.lowercase(), 18f, face = lightFace).apply { maxLines = 1 })
+                    addView(ui.text("${seg.tiles.size} tiles" + if (folded) " · folded" else "", 12f, 0xCCFFFFFF.toInt()))
+                    setOnClickListener {
+                        metroOverlay.dismiss()
+                        jumpToGroup(seg.header)
+                    }
+                    setOnLongClickListener {
+                        seg.header?.let { showGroupMenu(it) }
+                        true
+                    }
+                }
+                cells.add(cell)
+                row.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4)) })
+            }
+            if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { setMargins(ui.dp(4), 0, ui.dp(4), 0) })
+            grid.addView(row)
+        }
+        page.addView(grid)
+        page.addView(ui.action(R.drawable.ic_m_title, "New group", "Name a set of tiles") {
+            metroOverlay.dismiss()
+            newGroup()
+        })
+        page.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Tidy, sort or group by kind") { showArrange() })
+        metroOverlay.show(ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            addView(page)
+        }, MetroOverlay.Style.PANEL)
+        // Zoom-out entrance, like W10M semantic zoom.
+        cells.forEachIndexed { i, c ->
+            c.alpha = 0f
+            c.scaleX = 1.25f
+            c.scaleY = 1.25f
+            c.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(60L + i * 30L).setDuration(260).setInterpolator(DecelerateInterpolator(2f)).start()
+        }
+    }
+
+    private fun jumpToGroup(header: TileItem?) {
+        val rv = rvTiles ?: return
+        if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+        if (header == null) {
+            rv.smoothScrollToPosition(0)
+            return
+        }
+        if (header.flag("collapsed")) {
+            tileAdapter.toggleGroup(header)
+            prefs.saveTiles(tiles)
+        }
+        rv.postDelayed({ rv.smoothScrollToPosition(tileAdapter.positionOf(header)) }, 200)
+    }
+
+    private fun newGroup() {
+        prompt("Name this group", "", "e.g. Work, Games", suggestions = listOf("Work", "Social", "Games", "Media", "Tools", "Favourites")) { name ->
+            addTile(TileItem(UUID.randomUUID().toString(), TileType.SECTION_HEADER, name, size = TileSize.WIDE))
+            toast("Drag tiles under “$name” in Customise mode")
+        }
+    }
+
+    private fun showGroupMenu(header: TileItem) {
+        val card = ui.card()
+        val members = tileAdapter.groupMembers(header)
+        card.addView(ui.header(header.title, "Group · ${members.size} tiles"))
+        card.addView(ui.action(R.drawable.ic_m_edit, "Rename group") { metroOverlay.dismiss(); renameHolder(header) })
+        if (members.isNotEmpty()) {
+            card.addView(ui.action(R.drawable.ic_m_chevron_down, if (header.flag("collapsed")) "Unfold group" else "Fold group", "Tip: tap the group name") {
+                metroOverlay.dismiss()
+                tileAdapter.toggleGroup(header)
+                prefs.saveTiles(tiles)
+            })
+        }
+        card.addView(ui.action(R.drawable.ic_m_back, "Move group up") {
+            metroOverlay.dismiss()
+            StartArranger.moveGroup(tiles, header, up = true)?.let { applyArrangement(it, "Group moved") } ?: toast("Already at the top")
+        })
+        card.addView(ui.action(R.drawable.ic_m_forward, "Move group down") {
+            metroOverlay.dismiss()
+            StartArranger.moveGroup(tiles, header, up = false)?.let { applyArrangement(it, "Group moved") } ?: toast("Already at the bottom")
+        })
+        if (members.size > 1) {
+            card.addView(ui.action(R.drawable.ic_m_sort, "Sort this group A to Z") {
+                metroOverlay.dismiss()
+                val segs = StartArranger.segments(tiles).map { if (it.header === header) it.copy(tiles = it.tiles.sortedBy { t -> t.title.lowercase() }) else it }
+                applyArrangement(StartArranger.flatten(segs), "Group sorted")
+            })
+        }
+        card.addView(ui.action(R.drawable.ic_m_close, "Remove group name", "The tiles stay on Start") {
+            metroOverlay.dismiss()
+            header.setFlag("collapsed", false)
+            unpin(header)
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    // ── Arranging ───────────────────────────────────────────────────────────────────────
+
+    private fun showArrange() {
+        val card = ui.card()
+        card.addView(ui.header("Arrange tiles", "Every change can be undone"))
+        val usage = prefs.usageCounts()
+        val launches = { t: TileItem -> t.launchCount.coerceAtLeast(usage[t.packageName] ?: 0) }
+        card.addView(ui.action(R.drawable.ic_m_resize, "Pack tightly", "Bigger tiles first in each group, so there are no gaps") {
+            metroOverlay.dismiss()
+            applyArrangement(StartArranger.packTightly(tiles), "Tiles packed")
+        })
+        card.addView(ui.action(R.drawable.ic_m_sort, "A to Z", "Sort tiles by name in each group") {
+            metroOverlay.dismiss()
+            applyArrangement(StartArranger.alphabetical(tiles), "Sorted A to Z")
+        })
+        card.addView(ui.action(R.drawable.ic_m_live, "Most used first", "The apps you open most go to the top of their group") {
+            metroOverlay.dismiss()
+            applyArrangement(StartArranger.byUse(tiles, launches), "Most used first")
+        })
+        card.addView(ui.action(R.drawable.ic_m_spaces, "Group by kind", "Social, Games, Work… named automatically") {
+            metroOverlay.dismiss()
+            applyArrangement(StartArranger.byCategory(tiles, { AppCategories.of(this, it.packageName, it.title) }, launches), "Grouped by kind")
+        })
+        card.addView(ui.action(R.drawable.ic_m_add, "Grow what I use", "Often used apps get bigger tiles; sizes you set stay") {
+            metroOverlay.dismiss()
+            val before = tiles.map { it.size }
+            var grown = 0
+            tiles.filter { it.type == TileType.APP_SHORTCUT && !it.sizeLocked }.forEach { t ->
+                val earned = TileSize.grownFor(t.size, launches(t))
+                if (earned != t.size && earned.cols <= prefs.columns) {
+                    t.size = earned
+                    grown++
+                    tileAdapter.refresh(t)
+                }
+            }
+            prefs.saveTiles(tiles)
+            if (grown == 0) toast("Nothing to grow yet · keep using your apps")
+            else offerUndo("$grown tiles grew", onUndo = {
+                tiles.forEachIndexed { i, t -> before.getOrNull(i)?.let { if (t.size != it) { t.size = it; tileAdapter.refresh(t) } } }
+                prefs.saveTiles(tiles)
+            }, onExpire = {})
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    /** Replaces the tile order with [arranged], with Undo. */
+    @SuppressLint("NotifyDataSetChanged")
+    private fun applyArrangement(arranged: List<TileItem>, message: String) {
+        val before = tiles.toList()
+        fun set(list: List<TileItem>) {
+            tileAdapter.exitEditMode()
+            tileAdapter.closeFolder()
+            tiles.clear()
+            tiles.addAll(list)
+            tileAdapter.notifyDataSetChanged()
+            prefs.saveTiles(tiles)
+            rvTiles?.let { rv ->
+                if (prefs.animationsEnabled) rv.doOnLayout { MetroMotion.turnstileIn(rv, { child -> tileAdapter.motionView(rv, child) }) }
+            }
+        }
+        set(arranged)
+        offerUndo(message, onUndo = { set(before) }, onExpire = {})
+    }
+
+    // ── Swipe actions ───────────────────────────────────────────────────────────────────
+
+    private fun swipeLabel(tile: TileItem): String = when (val a = tile.extras["swipe"].orEmpty()) {
+        "" -> "Notifications"
+        "info" -> "App info"
+        "media" -> "Play or pause music"
+        "search" -> "Search"
+        "off" -> "Nothing"
+        else -> if (a.startsWith("shortcut:")) tile.packageName?.let { pkg -> shortcuts.find(pkg, a.removePrefix("shortcut:"))?.shortLabel?.toString() } ?: "Shortcut" else a
+    }
+
+    private fun chooseSwipe(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header("Swipe across ${tile.title}", "A quick sideways swipe on the tile"))
+        fun option(value: String, icon: Int, label: String, subtitle: String? = null) {
+            card.addView(ui.action(if (tile.extras["swipe"].orEmpty() == value) R.drawable.ic_m_check else icon, label, subtitle) {
+                metroOverlay.dismiss()
+                if (value.isEmpty()) tile.extras.remove("swipe") else tile.extras["swipe"] = value
+                prefs.saveTiles(tiles)
+            })
+        }
+        option("", R.drawable.ic_m_notifications, "Notifications", "When the app has some")
+        option("media", R.drawable.ic_m_play, "Play or pause music")
+        option("search", R.drawable.ic_m_search, "Search")
+        if (tile.packageName != null) option("info", R.drawable.ic_m_info, "App info")
+        tile.packageName?.let { pkg ->
+            shortcuts.forPackage(pkg).forEach { info ->
+                val label = info.shortLabel?.toString() ?: return@forEach
+                option("shortcut:${info.id}", R.drawable.ic_m_forward, label, "App shortcut")
+            }
+        }
+        option("off", R.drawable.ic_m_close, "Nothing")
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun runSwipe(tile: TileItem) {
+        val action = tile.extras["swipe"].orEmpty()
+        when {
+            action.isEmpty() -> showTileNotifications(tile)
+            action == "off" -> Unit
+            action == "info" -> tile.packageName?.let { openAppInfo(it) }
+            action == "media" -> if (media.hasSession) media.playPause() else toast("Nothing is playing")
+            action == "search" -> openSearch()
+            action.startsWith("shortcut:") -> tile.packageName?.let { pkg ->
+                if (!shortcuts.start(pkg, action.removePrefix("shortcut:"), null, null)) toast("That shortcut is no longer available")
+            }
+        }
+    }
+
+    // ── Gestures on Start ───────────────────────────────────────────────────────────────
+
+    private fun runTwoFingerGesture() {
+        when (prefs.twoFingerAction) {
+            "search" -> openSearch()
+            "notifications" -> if (!GestureActions.expandNotifications(this)) promptGestureHelper("open the notification shade")
+            "overview" -> showOverview()
+        }
+    }
+
+    private fun runPinchGesture() {
+        when (prefs.pinchAction) {
+            "overview" -> showOverview()
+            "settings" -> settingsPage.show()
+        }
+    }
+
+    private fun runSwipeRightGesture() {
+        when (prefs.swipeRightAction) {
+            "space" -> nextSpace()
+            "search" -> openSearch()
+        }
+    }
+
+    private fun isPowerSaving(): Boolean =
+        prefs.batterySaverPause && getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
+
+    // ── Nightstand: Glance while charging ───────────────────────────────────────────────
+
+    private val nightstandRunnable = Runnable {
+        if (prefs.nightstand && isCharging() && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            !metroOverlay.isShowing && searchPanel.visibility != View.VISIBLE
+        ) {
+            startActivity(Intent(this, GlanceActivity::class.java).putExtra(GlanceActivity.EXTRA_NIGHTSTAND, true))
+            @Suppress("DEPRECATION")
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        }
+    }
+
+    private fun isCharging(): Boolean =
+        (registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+
+    private fun scheduleNightstand() {
+        handler.removeCallbacks(nightstandRunnable)
+        if (prefs.nightstand && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && isCharging()) {
+            handler.postDelayed(nightstandRunnable, 60_000L)
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && prefs.nightstand) scheduleNightstand()
+        return super.dispatchTouchEvent(ev)
+    }
+
     // ── Look & feel ─────────────────────────────────────────────────────────────────────
 
     private fun applySystemBars() {
@@ -2284,7 +3392,7 @@ class LauncherActivity : AppCompatActivity() {
 
     /** Wallpaper parallax: x follows Start → All apps, y follows how far Start is scrolled. */
     private fun updateWallpaperOffsets() {
-        if (!prefs.wallpaperParallax || prefs.backgroundMode == "picture") return
+        if (!prefs.wallpaperParallax || prefs.backgroundMode == "picture" || isPowerSaving()) return
         val token = root.windowToken ?: return
         try {
             val wm = WallpaperManager.getInstance(this)
@@ -2340,12 +3448,19 @@ class LauncherActivity : AppCompatActivity() {
         }
         handler.removeCallbacks(liveTick)
         handler.postDelayed(liveTick, 2500)
+        if (tiles.any { it.type == TileType.TOGGLES }) toggles.start()
+        if (tiles.any { it.type == TileType.STEPS } && !needsActivityPermission()) stepCounter.start()
+        tileAdapter.smartRotateStacks { stackPick(it) }
+        scheduleNightstand()
         playEntranceIfNeeded()
     }
 
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(liveTick)
+        handler.removeCallbacks(nightstandRunnable)
+        toggles.stop()
+        stepCounter.stop()
         try {
             unregisterReceiver(timeReceiver)
             unregisterReceiver(batteryReceiver)
@@ -2359,6 +3474,7 @@ class LauncherActivity : AppCompatActivity() {
         widgets.stopListening()
         tileAdapter.exitEditMode()
         tileAdapter.closeFolder()
+        unlockedFolders.clear()
         playEntrance = true
     }
 

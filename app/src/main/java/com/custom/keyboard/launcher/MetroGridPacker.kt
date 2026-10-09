@@ -11,8 +11,11 @@ import kotlin.math.roundToInt
  */
 object MetroGridPacker {
 
-    /** A tile's footprint in cells, or a fixed pixel height for full-width rows. */
-    data class Spec(val cols: Int, val rows: Int, val fullWidthHeightPx: Int = 0)
+    /**
+     * A tile's footprint in cells, or a fixed pixel height for full-width rows. [hidden] tiles
+     * (in a folded group) take no room and get an empty frame where the group ends.
+     */
+    data class Spec(val cols: Int, val rows: Int, val fullWidthHeightPx: Int = 0, val hidden: Boolean = false)
 
     data class Frame(val left: Int, val top: Int, val right: Int, val bottom: Int)
 
@@ -47,6 +50,11 @@ object MetroGridPacker {
         }
 
         for (spec in specs) {
+            if (spec.hidden) {
+                val top = (groupTop + cells.size * pitch).roundToInt()
+                result.add(Frame(originX, top, originX, top))
+                continue
+            }
             if (spec.fullWidthHeightPx > 0) {
                 val top = groupTop + cells.size * pitch
                 result.add(Frame(originX, top.roundToInt(), fullWidthRight, (top + spec.fullWidthHeightPx).roundToInt()))

@@ -120,7 +120,33 @@ class KeyboardPreferences(context: Context) {
         putList(KEY_CLIP_HISTORY, (listOf(clean) + getList(KEY_CLIP_HISTORY).filter { it != clean }).take(20))
     }
 
+    /** Clipboard history; pinned clips stay. */
     fun clearClipHistory() = putList(KEY_CLIP_HISTORY, emptyList())
+
+    /** Clips the user pinned: kept forever, shown first. */
+    val pinnedClips: List<String> get() = getList(KEY_PINNED_CLIPS)
+
+    fun togglePinnedClip(text: String): Boolean {
+        val pinned = getList(KEY_PINNED_CLIPS)
+        val nowPinned = text !in pinned
+        putList(KEY_PINNED_CLIPS, if (nowPinned) (listOf(text) + pinned).take(30) else pinned - text)
+        return nowPinned
+    }
+
+    /** Swipe a finger across the letters to type a word. */
+    var glideTyping: Boolean
+        get() = prefs.getBoolean(KEY_GLIDE, true)
+        set(value) = prefs.edit().putBoolean(KEY_GLIDE, value).apply()
+
+    /** Show the swipe trail while gliding. */
+    var glideTrail: Boolean
+        get() = prefs.getBoolean(KEY_GLIDE_TRAIL, true)
+        set(value) = prefs.edit().putBoolean(KEY_GLIDE_TRAIL, value).apply()
+
+    /** Suggest the next word from what you usually type. */
+    var nextWordHints: Boolean
+        get() = prefs.getBoolean(KEY_NEXT_WORD, true)
+        set(value) = prefs.edit().putBoolean(KEY_NEXT_WORD, value).apply()
 
     /** Last language picked in the translate panel (BCP-47 code). */
     var translateTarget: String
@@ -160,5 +186,9 @@ class KeyboardPreferences(context: Context) {
         private const val KEY_RECENT_EMOJI = "recent_emoji_json"
         private const val KEY_CLIP_HISTORY = "clip_history_json"
         private const val KEY_TRANSLATE_TARGET = "translate_target"
+        private const val KEY_PINNED_CLIPS = "pinned_clips_json"
+        private const val KEY_GLIDE = "glide_typing"
+        private const val KEY_GLIDE_TRAIL = "glide_trail"
+        private const val KEY_NEXT_WORD = "next_word_hints"
     }
 }

@@ -361,6 +361,33 @@
             android:layout_marginBottom="8dp" />
 
         <CheckBox
+            android:id="@+id/cb_glide"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Swipe typing (glide across letters)"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_glide_trail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Show the swipe trail"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/cb_next_word"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Suggest the next word from how you type"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
             android:id="@+id/cb_auto_cap"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

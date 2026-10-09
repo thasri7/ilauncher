@@ -27,7 +27,9 @@ class AppDrawerAdapter(
     private val onAppClick: (AppLauncherHelper.AppEntry, View) -> Unit,
     private val onAppLongClick: ((AppLauncherHelper.AppEntry, View) -> Unit)? = null,
     private val onHeaderClick: (() -> Unit)? = null,
-    private val onPrivateClick: (() -> Unit)? = null
+    private val onPrivateClick: (() -> Unit)? = null,
+    /** Glyph shown on marked apps: a pin in All apps, a tick in pickers. */
+    private val markIcon: Int = R.drawable.ic_m_pin
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     sealed class Row {
@@ -208,7 +210,8 @@ class AppDrawerAdapter(
                 icons.iconAsync(app.packageName, themed = false) { d, _ -> if (boundKey == key) icon.setImageDrawable(d) }
             }
             pin.visibility = if (isPinned(app.packageName)) View.VISIBLE else View.GONE
-            pin.imageTintList = ColorStateList.valueOf(0x99FFFFFF.toInt())
+            pin.setImageResource(markIcon)
+            pin.imageTintList = ColorStateList.valueOf(if (markIcon == R.drawable.ic_m_pin) 0x99FFFFFF.toInt() else accent())
             itemView.setOnTouchListener { v, e ->
                 if (tiltEnabled()) when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> MetroMotion.tiltTo(v, e.x, e.y)

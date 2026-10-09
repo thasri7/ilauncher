@@ -67,4 +67,15 @@ class MetroGridPackerTest {
         assertEquals(MetroGridPacker.Frame(58, 2, 104, 48), r.frames[1])
         assertEquals(52, r.contentBottom)
     }
+
+    @Test
+    fun hiddenTilesTakeNoRoom() {
+        val packed = MetroGridPacker.pack(
+            listOf(Spec(2, 2), Spec(2, 2, hidden = true), Spec(2, 2)),
+            columns = 4, pitch = 10f, gutter = 0, originX = 0, originY = 0, fullWidthRight = 40
+        )
+        assertEquals(20, packed.frames[2].left)
+        assertEquals(0, packed.frames[1].right - packed.frames[1].left)
+        assertEquals(20, packed.contentBottom)
+    }
 }

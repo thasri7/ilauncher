@@ -153,6 +153,17 @@ class MainActivity : AppCompatActivity() {
             prefs.autoCorrect = isChecked
         }
 
+        listOf(
+            R.id.cb_glide to (prefs.glideTyping to { on: Boolean -> prefs.glideTyping = on }),
+            R.id.cb_glide_trail to (prefs.glideTrail to { on: Boolean -> prefs.glideTrail = on }),
+            R.id.cb_next_word to (prefs.nextWordHints to { on: Boolean -> prefs.nextWordHints = on })
+        ).forEach { (id, state) ->
+            findViewById<CheckBox>(id).apply {
+                isChecked = state.first
+                setOnCheckedChangeListener { _, isChecked -> state.second(isChecked) }
+            }
+        }
+
         val cbAutoCap = findViewById<CheckBox>(R.id.cb_auto_cap)
         cbAutoCap.isChecked = prefs.autoCapitalize
         cbAutoCap.setOnCheckedChangeListener { _, isChecked ->

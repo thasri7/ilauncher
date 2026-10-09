@@ -179,7 +179,7 @@ class WeatherRepository(private val context: Context, private val prefs: TilePre
             val result = runCatching {
                 val url = "$FORECAST_URL?latitude=$lat&longitude=$lon" +
                     "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day" +
-                    "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=5&timezone=auto" +
+                    "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=7&timezone=auto" +
                     (if (unit == "F") "&temperature_unit=fahrenheit&wind_speed_unit=mph" else "")
                 WeatherParser.forecast(get(url), place, unit, System.currentTimeMillis())
             }

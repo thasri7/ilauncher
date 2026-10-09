@@ -18,7 +18,23 @@ enum class TileType {
     /** Slideshow of photos the user picked. */
     PHOTOS,
     /** An Android home-screen widget hosted inside a tile. */
-    WIDGET
+    WIDGET,
+    /** Several apps in one tile that take turns, like a smart stack; apps in [TileItem.children]. */
+    STACK,
+    /** A sticky note the user writes on. */
+    NOTE,
+    /** Days until (or since) a date. */
+    COUNTDOWN,
+    /** The time in another city. */
+    WORLD_CLOCK,
+    /** Quick switches: torch, Wi-Fi, Bluetooth, sound, Do Not Disturb, location. */
+    TOGGLES,
+    /** Today's screen time and most used apps (needs usage access). */
+    SCREEN_TIME,
+    /** Mobile and Wi-Fi data used this month (needs usage access). */
+    DATA_USAGE,
+    /** Steps today from the phone's step counter. */
+    STEPS
 }
 
 /**
@@ -121,6 +137,24 @@ data class TileItem(
     var shortcutId: String? = null,
     /** Bound widget id for WIDGET tiles, or -1. */
     var appWidgetId: Int = -1,
-    /** Apps inside a FOLDER tile. */
-    val children: MutableList<TileItem> = mutableListOf()
-)
+    /** Apps inside a FOLDER or STACK tile. */
+    val children: MutableList<TileItem> = mutableListOf(),
+    /**
+     * Small per-tile settings, saved with the tile: look ("style", "cover", "coverIcon"), group
+     * state ("collapsed"), folder lock ("locked"), swipe action ("swipe") and the content of
+     * custom tiles (note text, countdown date, world-clock zone, toggles…).
+     */
+    val extras: MutableMap<String, String> = mutableMapOf()
+) {
+    /** Which app a STACK tile shows right now; not saved. */
+    var stackIndex: Int = 0
+
+    fun flag(key: String): Boolean = extras[key] == "1"
+
+    fun setFlag(key: String, on: Boolean) {
+        if (on) extras[key] = "1" else extras.remove(key)
+    }
+
+    /** Tiles that hold other apps. */
+    val holdsApps: Boolean get() = type == TileType.FOLDER || type == TileType.STACK
+}

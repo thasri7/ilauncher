@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
@@ -63,6 +64,8 @@ class MetroTileAdapter(
     private val weather: () -> WeatherReport?,
     private val weatherConfigured: () -> Boolean,
     private val cellPitch: () -> Float,
+    private val toggles: QuickToggles,
+    private val steps: StepCounter,
     private val callbacks: Callbacks
 ) : RecyclerView.Adapter<MetroTileAdapter.TileHolder>() {
 
@@ -80,6 +83,13 @@ class MetroTileAdapter(
         /** False while Start is locked against edits. */
         fun canCustomise(): Boolean
         fun onLockedLongPress(tile: TileItem)
+        /** A switch on a Toggles tile was tapped. */
+        fun onToggle(tile: TileItem, id: String)
+        /** The name row of an open folder was tapped. */
+        fun onFolderRename(folder: TileItem)
+        fun appLabel(packageName: String): String
+        /** Packages of home apps, left out of screen time. */
+        fun homePackages(): Set<String>
     }
 
     companion object {
@@ -98,6 +108,12 @@ class MetroTileAdapter(
         private const val TYPE_PHOTOS = 13
         private const val TYPE_WIDGET = 14
         private const val TYPE_WEATHER = 15
+        private const val TYPE_STACK = 16
+        private const val TYPE_INFO = 17
+        private const val TYPE_TOGGLES = 18
+
+        /** Tile types drawn by [InfoHolder]. */
+        val INFO_TYPES = setOf(TileType.NOTE, TileType.COUNTDOWN, TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS)
 
         /** Re-read time/battery/storage values without re-binding anything else. */
         const val PAYLOAD_TICK = "tick"
@@ -177,14 +193,26 @@ class MetroTileAdapter(
         closeFolder()
         tiles.add(index.coerceIn(0, tiles.size), tile)
         notifyItemInserted(positionOf(tile))
+        // A new tile never lands out of sight in a folded group: unfold it.
+        if (tile.type != TileType.SECTION_HEADER) {
+            val header = tiles.subList(0, tiles.indexOf(tile)).lastOrNull { it.type == TileType.SECTION_HEADER }
+            if (header != null && header.flag("collapsed")) {
+                header.setFlag("collapsed", false)
+                notifyItemChanged(positionOf(header), PAYLOAD_RESTYLE)
+                groupMembers(header).forEach { if (it !== tile) notifyItemChanged(positionOf(it), PAYLOAD_RESTYLE) }
+            }
+        }
     }
 
     fun removeTile(tile: TileItem) {
         if (tile.id == openFolderId) closeFolder()
         val pos = positionOf(tile)
         if (pos < 0) return
+        // Removing a group name moves its tiles into the group above; redraw them there.
+        val members = if (tile.type == TileType.SECTION_HEADER) groupMembers(tile) else emptyList()
         tiles.remove(tile)
         notifyItemRemoved(pos)
+        members.forEach { notifyItemChanged(positionOf(it), PAYLOAD_RESTYLE) }
     }
 
     /** Swaps a tile for another, e.g. an app tile turning into a folder. */
@@ -278,9 +306,89 @@ class MetroTileAdapter(
         tiles.forEach { tile -> if (predicate(tile)) notifyItemChanged(positionOf(tile), payload) }
     }
 
-    fun tick() = notifyTypes(PAYLOAD_TICK) {
-        it.type == TileType.CLOCK_WEATHER || it.type == TileType.CALENDAR_BIG ||
-            it.type == TileType.BATTERY_STATUS || it.type == TileType.STORAGE_STATS
+    fun tick() {
+        if (tiles.any { it.type == TileType.SCREEN_TIME }) UsageReader.refreshScreenTime(context, callbacks.homePackages()) { onUsageChanged() }
+        if (tiles.any { it.type == TileType.DATA_USAGE }) UsageReader.refreshData(context) { onUsageChanged() }
+        notifyTypes(PAYLOAD_TICK) {
+            it.type == TileType.CLOCK_WEATHER || it.type == TileType.CALENDAR_BIG ||
+                it.type == TileType.BATTERY_STATUS || it.type == TileType.STORAGE_STATS ||
+                it.type == TileType.WORLD_CLOCK || it.type == TileType.COUNTDOWN || it.type == TileType.TOGGLES
+        }
+    }
+
+    fun onUsageChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.SCREEN_TIME || it.type == TileType.DATA_USAGE }
+
+    fun onStepsChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.STEPS }
+
+    fun onTogglesChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.TOGGLES }
+
+    /**
+     * Smart stacks open on the app you are most likely to want now: one with new messages, else
+     * the one you use most at this hour ([pick] returns a child index or -1).
+     */
+    fun smartRotateStacks(pick: (TileItem) -> Int) {
+        tiles.filter { it.type == TileType.STACK && it.children.size > 1 && !it.flag("manual") }.forEach { stack ->
+            val i = pick(stack)
+            if (i in stack.children.indices && i != stack.stackIndex) {
+                stack.stackIndex = i
+                notifyItemChanged(positionOf(stack), PAYLOAD_TICK)
+            }
+        }
+    }
+
+    // ── Groups ──────────────────────────────────────────────────────────────────────────
+
+    /** The tiles under a group name, up to the next group name. */
+    fun groupMembers(header: TileItem): List<TileItem> {
+        val start = tiles.indexOf(header)
+        if (start < 0) return emptyList()
+        val out = ArrayList<TileItem>()
+        for (i in start + 1 until tiles.size) {
+            if (tiles[i].type == TileType.SECTION_HEADER) break
+            out.add(tiles[i])
+        }
+        return out
+    }
+
+    /** Folds a group away under its name, or unfolds it. */
+    fun toggleGroup(header: TileItem) {
+        val collapse = !header.flag("collapsed")
+        val members = groupMembers(header)
+        val apply = {
+            header.setFlag("collapsed", collapse)
+            notifyItemChanged(positionOf(header), PAYLOAD_RESTYLE)
+            members.forEach { notifyItemChanged(positionOf(it), PAYLOAD_RESTYLE) }
+        }
+        val rv = recyclerView
+        if (collapse && rv != null && prefs.animationsEnabled) {
+            // Tiles shrink into the group name, then the rest of Start slides up.
+            var animating = 0
+            members.forEach { m ->
+                val h = rv.findViewHolderForAdapterPosition(positionOf(m)) as? TileHolder ?: return@forEach
+                animating++
+                MetroMotion.centerPivot(h.frame)
+                h.frame.animate().setStartDelay(0).scaleX(0.6f).scaleY(0.6f).alpha(0f).setDuration(150).start()
+            }
+            if (animating > 0) rv.postDelayed({ apply() }, 140) else apply()
+        } else {
+            apply()
+        }
+    }
+
+    private fun indexAt(position: Int): Int {
+        val panel = panelPosition()
+        return if (panel < 0 || position < panel) position else position - 1
+    }
+
+    /** True for tiles in a folded group (edit mode shows everything so tiles can move freely). */
+    private fun hiddenAt(position: Int): Boolean {
+        if (editMode || isPanel(position)) return false
+        val index = indexAt(position)
+        if (tiles.getOrNull(index)?.type == TileType.SECTION_HEADER) return false
+        for (i in index - 1 downTo 0) {
+            if (tiles[i].type == TileType.SECTION_HEADER) return tiles[i].flag("collapsed")
+        }
+        return false
     }
 
     fun onBatteryChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.BATTERY_STATUS }
@@ -335,10 +443,15 @@ class MetroTileAdapter(
             .filter { h ->
                 val tile = h.tile
                 h !is FolderPanelHolder && tile != null && tile.liveEnabled && h.hasBack(tile) &&
-                    h.itemView.bottom > 0 && h.itemView.top < rv.height
+                    h.itemView.height > 0 && h.itemView.bottom > 0 && h.itemView.top < rv.height
             }
-        val target = live.filter { it.showingBack && now - it.lastLiveAt > BACK_FACE_HOLD_MS }.randomOrNull()
-            ?: live.filter { !it.showingBack && now - it.lastLiveAt > FRONT_FACE_HOLD_MS }.randomOrNull()
+        val pace = when (prefs.liveSpeed) {
+            "slow" -> 2f
+            "fast" -> 0.55f
+            else -> 1f
+        }
+        val target = live.filter { it.showingBack && now - it.lastLiveAt > BACK_FACE_HOLD_MS * pace }.randomOrNull()
+            ?: live.filter { !it.showingBack && now - it.lastLiveAt > FRONT_FACE_HOLD_MS * pace }.randomOrNull()
             ?: return
         target.toggleFace(now)
     }
@@ -364,6 +477,7 @@ class MetroTileAdapter(
     fun spanFor(position: Int): MetroGridPacker.Spec {
         if (position < 0 || position >= itemCount) return MetroGridPacker.Spec(2, 2)
         if (isPanel(position)) return MetroGridPacker.Spec(0, 0, panelHeight(itemAt(position)))
+        if (hiddenAt(position)) return MetroGridPacker.Spec(0, 0, hidden = true)
         val tile = itemAt(position)
         return if (tile.type == TileType.SECTION_HEADER) {
             MetroGridPacker.Spec(0, 0, headerHeightPx)
@@ -373,12 +487,13 @@ class MetroTileAdapter(
     }
 
     private val panelPadding get() = (8 * density).toInt()
+    private val panelHeaderPx get() = (40 * density).toInt()
 
     private fun panelPerRow() = (prefs.columns / 2).coerceAtLeast(2)
 
     private fun panelHeight(folder: TileItem): Int {
         val rows = ceil(folder.children.size.coerceAtLeast(1) / panelPerRow().toFloat()).toInt()
-        return (panelPadding * 2 + rows * 2 * cellPitch() - prefs.gutterDp * density).toInt().coerceAtLeast(1)
+        return (panelPadding * 2 + panelHeaderPx + rows * 2 * cellPitch() - prefs.gutterDp * density).toInt().coerceAtLeast(1)
     }
 
     override fun getItemCount(): Int = tiles.size + if (panelPosition() >= 0) 1 else 0
@@ -400,6 +515,10 @@ class MetroTileAdapter(
             TileType.WIDGET -> TYPE_WIDGET
             TileType.WEATHER_LIVE -> TYPE_WEATHER
             TileType.KEYBOARD_SETTINGS, TileType.DEVICE_SETTINGS -> TYPE_ACTION
+            TileType.STACK -> TYPE_STACK
+            TileType.TOGGLES -> TYPE_TOGGLES
+            TileType.NOTE, TileType.COUNTDOWN, TileType.WORLD_CLOCK, TileType.SCREEN_TIME,
+            TileType.DATA_USAGE, TileType.STEPS -> TYPE_INFO
         }
     }
 
@@ -419,6 +538,9 @@ class MetroTileAdapter(
             TYPE_WIDGET -> R.layout.item_tile_widget
             TYPE_FOLDER_PANEL -> R.layout.item_tile_folder_panel
             TYPE_WEATHER -> R.layout.item_tile_weather
+            TYPE_STACK -> R.layout.item_tile_stack
+            TYPE_INFO -> R.layout.item_tile_info
+            TYPE_TOGGLES -> R.layout.item_tile_toggles
             else -> R.layout.item_tile_action
         }
         // itemView belongs to RecyclerView's item animator and ItemTouchHelper (they move it and
@@ -449,6 +571,9 @@ class MetroTileAdapter(
             TYPE_WIDGET -> WidgetHolder(root, frame, surface)
             TYPE_FOLDER_PANEL -> FolderPanelHolder(root, frame, surface)
             TYPE_WEATHER -> WeatherHolder(root, frame, surface)
+            TYPE_STACK -> StackHolder(root, frame, surface)
+            TYPE_INFO -> InfoHolder(root, frame, surface)
+            TYPE_TOGGLES -> TogglesHolder(root, frame, surface)
             else -> ActionHolder(root, frame, surface)
         }
         if (holder !is FolderPanelHolder) wireTouches(holder)
@@ -488,7 +613,10 @@ class MetroTileAdapter(
             onBindViewHolder(holder, position)
             return
         }
-        if (PAYLOAD_EDIT in payloads) applyEditState(holder, tile, animate = true)
+        if (PAYLOAD_EDIT in payloads) {
+            applyEditState(holder, tile, animate = true)
+            if (holder is HeaderHolder) holder.bindContent(tile)
+        }
         if (payloads.any { it == PAYLOAD_TICK || it == PAYLOAD_NOTIFICATIONS || it == PAYLOAD_MEDIA }) {
             holder.bindContent(tile)
             if (holder.showingBack && !holder.hasBack(tile)) holder.resetFaces()
@@ -524,17 +652,40 @@ class MetroTileAdapter(
         return (windowLocation[0] + holder.itemView.left).toFloat() to (windowLocation[1] + holder.itemView.top).toFloat()
     }
 
-    private fun tileBackground(holder: TileHolder, color: Int, radius: Float): Drawable {
-        val picture = if (prefs.backgroundMode == "picture") backdrop() else null
+    /** "solid", "glass", "clear", or "" to follow the Start settings. */
+    private fun styleOf(tile: TileItem): String = tile.extras["style"].orEmpty()
+
+    /** True when text sits straight on the wallpaper or a picture and needs a shadow to read. */
+    private fun needsShadow(tile: TileItem) = styleOf(tile) == "clear" || hasCover(tile)
+
+    private fun hasCover(tile: TileItem) = tile.extras["cover"] == "1"
+
+    private fun tileBackground(holder: TileHolder, tile: TileItem, color: Int, radius: Float): Drawable? {
+        val style = styleOf(tile)
+        if (style == "clear") return null
+        val picture = if (prefs.backgroundMode == "picture" && style.isEmpty()) backdrop() else null
         if (picture != null) {
             // The picture shows through the tile with a light wash of the tile colour.
             val tint = withAlpha(color, (prefs.tileOpacity - 40).coerceIn(0, 60))
             return picture.tileDrawable(tint, radius) { screenOffset(holder) }
         }
-        return GradientDrawable().apply {
-            setColor(withAlpha(color, prefs.tileOpacity.coerceIn(20, 100)))
+        val glass = style == "glass" || (style.isEmpty() && prefs.tileFinish == "glass")
+        val opacity = when (style) {
+            "solid" -> 100
+            "glass" -> minOf(prefs.tileOpacity, 45)
+            else -> prefs.tileOpacity.coerceIn(20, 100)
+        }
+        val base = GradientDrawable().apply {
+            setColor(withAlpha(color, opacity))
+            cornerRadius = radius
+            if (glass) setStroke(maxOf(1, density.toInt()), 0x40FFFFFF)
+        }
+        if (!glass) return base
+        // Frosted glass: a soft light falling from the top edge over the translucent colour.
+        val sheen = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x30FFFFFF, 0x08FFFFFF, 0x00FFFFFF)).apply {
             cornerRadius = radius
         }
+        return LayerDrawable(arrayOf(base, sheen))
     }
 
     private fun styleSurface(holder: TileHolder, tile: TileItem) {
@@ -545,9 +696,23 @@ class MetroTileAdapter(
                 setColor(withAlpha(darker(colorFor(tile), 0.55f), prefs.tileOpacity.coerceIn(40, 100)))
                 cornerRadius = radius
             }
-            else -> tileBackground(holder, colorFor(tile), radius)
+            else -> tileBackground(holder, tile, colorFor(tile), radius)
         }
-        holder.surface.clipToOutline = prefs.cornerRadiusDp > 0 || tile.type == TileType.WIDGET
+        holder.surface.clipToOutline = prefs.cornerRadiusDp > 0 || tile.type == TileType.WIDGET || hasCover(tile)
+        if (hasCover(tile) && holder !is FolderPanelHolder) {
+            val file = TileMedia.cover(context, tile.id)
+            if (file != null) {
+                val id = tile.id
+                TileMedia.loadAsync(file, maxOf(tileWidthPx(tile), tileHeightPx(tile)).toInt().coerceAtLeast(64)) { bmp ->
+                    val now = holder.tile
+                    if (bmp != null && now?.id == id && hasCover(now)) holder.surface.background = CoverDrawable(bmp, radius)
+                }
+            }
+        }
+        val shadow = needsShadow(tile)
+        holder.textViews.forEach { tv ->
+            if (shadow) tv.setShadowLayer(5f, 0f, 1f, 0xB3000000.toInt()) else tv.setShadowLayer(0f, 0f, 0f, 0)
+        }
     }
 
     private fun tileWidthPx(tile: TileItem): Float = tile.size.cols * cellPitch() - prefs.gutterDp * density
@@ -612,7 +777,7 @@ class MetroTileAdapter(
         val swipeDistance = 56 * density
         root.setOnTouchListener { v, e ->
             val tile = holder.tile ?: return@setOnTouchListener false
-            val tilts = !editMode && prefs.tiltEnabled && tile.type != TileType.SECTION_HEADER && tile.type != TileType.WIDGET
+            val tilts = !editMode && prefs.tiltEnabled && tile.type != TileType.SECTION_HEADER && tile.type != TileType.WIDGET && tile.type != TileType.TOGGLES
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX
@@ -628,7 +793,7 @@ class MetroTileAdapter(
                         dragging = true
                         select(tile.id)
                         callbacks.onStartDrag(holder)
-                    } else if (!editMode && !swiping && abs(dx) > touchSlop * 0.6f && abs(dx) > 2 * abs(dy) && hasUnread(tile)) {
+                    } else if (!editMode && !swiping && abs(dx) > touchSlop * 0.6f && abs(dx) > 2 * abs(dy) && swipeable(tile)) {
                         // Claim the horizontal swipe before the pager turns it into a page change.
                         swiping = true
                         v.parent?.requestDisallowInterceptTouchEvent(true)
@@ -642,7 +807,16 @@ class MetroTileAdapter(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (swiping) {
                         frame.animate().setStartDelay(0).translationX(0f).setDuration(180).start()
-                        if (e.actionMasked == MotionEvent.ACTION_UP && abs(e.rawX - downX) > swipeDistance) callbacks.onTileSwipe(tile)
+                        val dx = e.rawX - downX
+                        if (e.actionMasked == MotionEvent.ACTION_UP && abs(dx) > swipeDistance) {
+                            if (tile.type == TileType.STACK && holder is StackHolder) {
+                                // Swiping a stack flips to the next (or previous) app by hand.
+                                tile.setFlag("manual", true)
+                                holder.advance(if (dx < 0) 1 else -1)
+                            } else {
+                                callbacks.onTileSwipe(tile)
+                            }
+                        }
                         swiping = false
                         // Swallow the tap that would otherwise open the app.
                         return@setOnTouchListener true
@@ -791,8 +965,15 @@ class MetroTileAdapter(
 
     private fun hasUnread(tile: TileItem) = when (tile.type) {
         TileType.APP_SHORTCUT -> tile.shortcutId == null && (NotificationHub.get(tile.packageName)?.count ?: 0) > 0
-        TileType.FOLDER -> tile.children.any { (NotificationHub.get(it.packageName)?.count ?: 0) > 0 }
+        TileType.FOLDER -> !tile.flag("locked") && tile.children.any { (NotificationHub.get(it.packageName)?.count ?: 0) > 0 }
         else -> false
+    }
+
+    /** Tiles that react to a sideways swipe: stacks change app, others run their swipe action. */
+    private fun swipeable(tile: TileItem) = when {
+        tile.type == TileType.STACK -> tile.children.size > 1
+        !tile.extras["swipe"].isNullOrEmpty() -> true
+        else -> hasUnread(tile)
     }
 
     /** The view that Metro motion (tilt, turnstile, edit-mode shrink) animates for a tile. */
@@ -877,6 +1058,16 @@ class MetroTileAdapter(
         /** Peek tiles slide their back face up; the rest flip like WP7 live tiles. */
         open val peeks = false
 
+        /** Text that gets a shadow on clear or picture tiles. */
+        val textViews: List<TextView> by lazy {
+            val out = ArrayList<TextView>()
+            fun walk(v: View) {
+                if (v is TextView) out.add(v) else if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+            }
+            walk(surface)
+            out
+        }
+
         abstract fun bindContent(tile: TileItem)
 
         open fun hasBack(tile: TileItem): Boolean = false
@@ -956,6 +1147,7 @@ class MetroTileAdapter(
                 icons.iconAsync(tile.packageName, themed = false) { d, _ -> if (boundKey == key) backIcon.setImageDrawable(d) }
             }
             sizeIcon(tile)
+            icon.show(!(hasCover(tile) && tile.extras["coverIcon"] == "0"))
 
             label.text = tile.title
             label.show(prefs.showLabels && !tile.size.isTiny)
@@ -977,6 +1169,7 @@ class MetroTileAdapter(
         private val label: TextView = surface.findViewById(R.id.tv_folder_name)
         private val count: TextView = surface.findViewById(R.id.tv_folder_count)
         private val chevron: ImageView = surface.findViewById(R.id.iv_folder_chevron)
+        private val lock: ImageView = surface.findViewById(R.id.iv_folder_lock)
         private var boundKey: String? = null
 
         override fun invalidateIcons() {
@@ -1009,9 +1202,13 @@ class MetroTileAdapter(
                     grid.addView(row)
                 }
             }
+            // A locked folder shows nothing of what is inside until it is unlocked.
+            val locked = tile.flag("locked")
+            grid.show(!locked)
+            lock.show(locked)
             label.text = tile.title
             label.show(prefs.showLabels && !tile.size.isTiny)
-            val unread = tile.children.sumOf { NotificationHub.get(it.packageName)?.count ?: 0 }
+            val unread = if (locked) 0 else tile.children.sumOf { NotificationHub.get(it.packageName)?.count ?: 0 }
             count.text = if (unread > 0) unread.toString() else ""
             count.show(unread > 0)
             chevron.show(!tile.size.isTiny)
@@ -1031,6 +1228,30 @@ class MetroTileAdapter(
             val perRow = panelPerRow()
             val color = colorFor(tile)
             val cells = ArrayList<View>()
+            // Folder name row: tap to rename.
+            container.addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding((6 * density).toInt(), 0, (6 * density).toInt(), 0)
+                addView(TextView(context).apply {
+                    text = tile.title
+                    setTextColor(Color.WHITE)
+                    textSize = 18f
+                    typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(ImageView(context).apply {
+                    setImageResource(R.drawable.ic_m_edit)
+                    alpha = 0.8f
+                    contentDescription = "Rename folder"
+                }, LinearLayout.LayoutParams((18 * density).toInt(), (18 * density).toInt()))
+                setOnClickListener { callbacks.onFolderRename(tile) }
+            }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, panelHeaderPx).apply {
+                leftMargin = panelPadding
+                rightMargin = panelPadding
+                topMargin = panelPadding / 2
+            })
             tile.children.forEachIndexed { i, app ->
                 val cell = FrameLayout(context).apply {
                     background = GradientDrawable().apply {
@@ -1076,7 +1297,7 @@ class MetroTileAdapter(
                 }
                 val lp = FrameLayout.LayoutParams(size, size).apply {
                     leftMargin = panelPadding + ((i % perRow) * 2 * pitch).toInt()
-                    topMargin = panelPadding + ((i / perRow) * 2 * pitch).toInt()
+                    topMargin = panelPadding + panelHeaderPx + ((i / perRow) * 2 * pitch).toInt()
                 }
                 container.addView(cell, lp)
                 cells.add(cell)
@@ -1464,7 +1685,7 @@ class MetroTileAdapter(
             backPlace.text = place.text
 
             days.removeAllViews()
-            report?.days?.drop(1)?.take(if (roomy) 4 else 2)?.forEach { d ->
+            report?.days?.drop(1)?.take(if (tile.size.isLarge) 6 else if (roomy) 4 else 2)?.forEach { d ->
                 days.addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
@@ -1525,9 +1746,326 @@ class MetroTileAdapter(
 
     inner class HeaderHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
         private val title: TextView = surface.findViewById(R.id.tv_section_title)
+        private val count: TextView = surface.findViewById(R.id.tv_section_count)
+        private val chevron: ImageView = surface.findViewById(R.id.iv_section_chevron)
 
         override fun bindContent(tile: TileItem) {
             title.text = tile.title.lowercase(Locale.getDefault())
+            val collapsed = tile.flag("collapsed") && !editMode
+            val members = groupMembers(tile)
+            count.text = if (collapsed && members.isNotEmpty()) members.size.toString() else ""
+            val rotation = if (collapsed) -90f else 0f
+            if (chevron.rotation != rotation) chevron.animate().setStartDelay(0).rotation(rotation).setDuration(200).start()
+            chevron.show(members.isNotEmpty())
+        }
+    }
+
+    // ── Stacks, info tiles and toggles ──────────────────────────────────────────────────
+
+    /** Several apps in one tile; they take turns like a smart stack, or swipe across to switch. */
+    inner class StackHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val icons2 = listOf<ImageView>(surface.findViewById(R.id.iv_stack_icon_front), surface.findViewById(R.id.iv_stack_icon_back))
+        private val names = listOf<TextView>(surface.findViewById(R.id.tv_stack_name_front), surface.findViewById(R.id.tv_stack_name_back))
+        private val counts = listOf<TextView>(surface.findViewById(R.id.tv_stack_count_front), surface.findViewById(R.id.tv_stack_count_back))
+        private val dots: LinearLayout = surface.findViewById(R.id.ll_stack_dots)
+        private val boundKeys = arrayOfNulls<String>(2)
+        /** Set by a swipe: the app the next reveal shows. */
+        private var pending: Int? = null
+
+        override val peeks = true
+
+        override fun hasBack(tile: TileItem) = tile.children.size > 1
+
+        override fun invalidateIcons() {
+            boundKeys.fill(null)
+        }
+
+        private fun bindFace(face: Int, tile: TileItem, index: Int) {
+            val app = tile.children.getOrNull(index) ?: return
+            val key = app.id + "/" + prefs.themedIcons
+            val iv = icons2[face]
+            if (boundKeys[face] != key) {
+                boundKeys[face] = key
+                iv.setImageDrawable(null)
+                appIconInto(iv, app, prefs.themedIcons, { boundKeys[face] == key })
+            }
+            val side = minOf(tileWidthPx(tile), tileHeightPx(tile))
+            iv.square((side * if (tile.size.isTiny) 0.5f else 0.36f).toInt())
+            names[face].text = app.title
+            names[face].show(prefs.showLabels && !tile.size.isTiny)
+            val n = NotificationHub.get(app.packageName)?.count ?: 0
+            counts[face].text = if (n > 0) n.toString() else ""
+        }
+
+        private fun bindDots(tile: TileItem) {
+            val n = tile.children.size
+            if (dots.childCount != n) {
+                dots.removeAllViews()
+                repeat(n) {
+                    dots.addView(View(context).apply {
+                        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
+                    }, LinearLayout.LayoutParams((4 * density).toInt(), (4 * density).toInt()).apply { setMargins(0, (2 * density).toInt(), 0, (2 * density).toInt()) })
+                }
+            }
+            for (i in 0 until dots.childCount) dots.getChildAt(i).alpha = if (i == tile.stackIndex) 1f else 0.4f
+            dots.show(n > 1 && tile.size.rows > 1)
+        }
+
+        override fun beforeReveal(showBack: Boolean) {
+            val tile = tile ?: return
+            val n = tile.children.size
+            if (n == 0) return
+            tile.stackIndex = (pending ?: (tile.stackIndex + 1)).mod(n)
+            pending = null
+            bindFace(if (showBack) 1 else 0, tile, tile.stackIndex)
+            bindDots(tile)
+        }
+
+        /** Shows the next ([step] = 1) or previous (-1) app straight away. */
+        fun advance(step: Int) {
+            val tile = tile ?: return
+            if (tile.children.size < 2) return
+            pending = tile.stackIndex + step
+            toggleFace(SystemClock.uptimeMillis())
+            root.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
+
+        override fun bindContent(tile: TileItem) {
+            if (tile.stackIndex !in tile.children.indices) tile.stackIndex = 0
+            bindFace(if (showingBack) 1 else 0, tile, tile.stackIndex)
+            bindDots(tile)
+        }
+    }
+
+    /** What an info tile shows. */
+    private data class Info(
+        val icon: Int?,
+        val value: String,
+        val unit: String = "",
+        val detail: String = "",
+        val label: String = "",
+        val backTitle: String = "",
+        val backDetail: String = "",
+        val progress: Float? = null,
+        val isNote: Boolean = false
+    )
+
+    private fun infoFor(tile: TileItem): Info = when (tile.type) {
+        TileType.NOTE -> {
+            val text = tile.extras["text"].orEmpty()
+            Info(if (text.isEmpty()) R.drawable.ic_m_note else null, "", detail = text.ifEmpty { "Tap to write a note" }, label = tile.title, isNote = true)
+        }
+        TileType.COUNTDOWN -> {
+            val target = Countdown.parse(tile.extras["date"])
+            if (target == null) {
+                Info(R.drawable.ic_m_event, "—", detail = "Tap to choose a date", label = tile.title)
+            } else {
+                val today = Calendar.getInstance()
+                val date = if (tile.flag("yearly")) Countdown.nextYearly(today, target.get(Calendar.MONTH), target.get(Calendar.DAY_OF_MONTH)) else target
+                val days = Countdown.daysBetween(today, date)
+                val big = if (days == 0) "Today" else abs(days).toString()
+                val unit = if (days == 0) "" else if (abs(days) == 1) "day" else "days"
+                val detail = when {
+                    days > 0 -> "until ${tile.title}"
+                    days < 0 -> "since ${tile.title}"
+                    else -> tile.title
+                }
+                val weeks = abs(days) / 7
+                Info(
+                    R.drawable.ic_m_event, big, unit, detail,
+                    label = DateFormat.format("EEE d MMM", date).toString(),
+                    backTitle = tile.title,
+                    backDetail = DateFormat.format("EEEE, d MMMM yyyy", date).toString() +
+                        (if (weeks > 0) "\n$weeks week${if (weeks == 1) "" else "s"} ${abs(days) % 7} day${if (abs(days) % 7 == 1) "" else "s"}" else "") +
+                        (if (tile.flag("yearly")) "\nEvery year" else "")
+                )
+            }
+        }
+        TileType.WORLD_CLOCK -> {
+            val zone = tile.extras["zone"]
+            if (zone.isNullOrEmpty()) {
+                Info(R.drawable.ic_m_globe, "—", detail = "Tap to choose a city", label = tile.title)
+            } else {
+                val tz = java.util.TimeZone.getTimeZone(zone)
+                val is24h = DateFormat.is24HourFormat(context)
+                val fmt = java.text.SimpleDateFormat(if (is24h) "H:mm" else "h:mm", Locale.getDefault()).apply { timeZone = tz }
+                val ampm = java.text.SimpleDateFormat("a", Locale.getDefault()).apply { timeZone = tz }
+                val dateFmt = java.text.SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).apply { timeZone = tz }
+                val now = Date()
+                Info(
+                    null, fmt.format(now), if (is24h) "" else ampm.format(now).lowercase(Locale.getDefault()),
+                    "${WorldClocks.dayLabel(zone)} · ${WorldClocks.offsetLabel(zone)}",
+                    label = tile.title,
+                    backTitle = tile.title,
+                    backDetail = dateFmt.format(now) + "\n" + tz.getDisplayName(tz.inDaylightTime(now), java.util.TimeZone.LONG, Locale.getDefault())
+                )
+            }
+        }
+        TileType.SCREEN_TIME -> {
+            val st = UsageReader.screenTime
+            when {
+                !UsageReader.hasAccess(context) -> Info(R.drawable.ic_m_phone_time, "—", detail = "Tap to allow usage access", label = tile.title)
+                st == null -> Info(R.drawable.ic_m_phone_time, "…", detail = "Reading today's use", label = tile.title)
+                else -> Info(
+                    R.drawable.ic_m_phone_time, UsageReader.formatDuration(st.totalMs), "",
+                    st.top.take(if (tile.size.isLarge) 4 else 2).joinToString("\n") { "${callbacks.appLabel(it.first)} · ${UsageReader.formatDuration(it.second)}" },
+                    label = tile.title,
+                    backTitle = if (st.unlocks > 0) "${st.unlocks} unlocks today" else "Most used today",
+                    backDetail = st.top.joinToString("\n") { "${callbacks.appLabel(it.first)}  ${UsageReader.formatDuration(it.second)}" }
+                )
+            }
+        }
+        TileType.DATA_USAGE -> {
+            val d = UsageReader.dataUse
+            when {
+                !UsageReader.hasAccess(context) -> Info(R.drawable.ic_m_data_usage, "—", detail = "Tap to allow usage access", label = tile.title)
+                d == null -> Info(R.drawable.ic_m_data_usage, "…", detail = "Reading data use", label = tile.title)
+                else -> Info(
+                    R.drawable.ic_m_data_usage, UsageReader.formatBytes(d.mobileMonth), "",
+                    "Mobile this month\nToday ${UsageReader.formatBytes(d.mobileToday)}",
+                    label = tile.title,
+                    backTitle = "Wi-Fi",
+                    backDetail = "This month ${UsageReader.formatBytes(d.wifiMonth)}\nToday ${UsageReader.formatBytes(d.wifiToday)}"
+                )
+            }
+        }
+        TileType.STEPS -> {
+            val count = steps.today
+            val goal = prefs.stepGoal.coerceAtLeast(1000)
+            when {
+                !steps.available -> Info(R.drawable.ic_m_walk, "—", detail = "This phone has no step counter", label = tile.title)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACTIVITY_RECOGNITION) != android.content.pm.PackageManager.PERMISSION_GRANTED ->
+                    Info(R.drawable.ic_m_walk, "—", detail = "Tap to allow activity access", label = tile.title)
+                count == null -> Info(R.drawable.ic_m_walk, "…", detail = "Counting", label = tile.title)
+                else -> Info(
+                    R.drawable.ic_m_walk, String.format(Locale.getDefault(), "%,d", count), "",
+                    if (count >= goal) "Goal reached" else "of ${String.format(Locale.getDefault(), "%,d", goal)}",
+                    label = tile.title,
+                    backTitle = "${(count * 100L / goal).coerceAtMost(999)}% of your goal",
+                    backDetail = String.format(Locale.getDefault(), "About %.1f km", count * 0.00075),
+                    progress = count / goal.toFloat()
+                )
+            }
+        }
+        else -> Info(null, "")
+    }
+
+    inner class InfoHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val icon: ImageView = surface.findViewById(R.id.iv_info_icon)
+        private val ring: RingGauge = surface.findViewById(R.id.v_info_ring)
+        private val value: TextView = surface.findViewById(R.id.tv_info_value)
+        private val unit: TextView = surface.findViewById(R.id.tv_info_unit)
+        private val detail: TextView = surface.findViewById(R.id.tv_info_detail)
+        private val label: TextView = surface.findViewById(R.id.tv_info_label)
+        private val backTitle: TextView = surface.findViewById(R.id.tv_info_back_title)
+        private val backDetail: TextView = surface.findViewById(R.id.tv_info_back_detail)
+        private var info: Info? = null
+
+        override fun hasBack(tile: TileItem) = !tile.size.isTiny && info?.backDetail?.isNotEmpty() == true
+
+        override fun bindContent(tile: TileItem) {
+            val i = infoFor(tile)
+            info = i
+            val w = tileWidthPx(tile)
+            val h = tileHeightPx(tile)
+            val tiny = tile.size.isTiny
+            icon.show(i.icon != null && !(tiny && i.value.isNotEmpty() && i.value != "—"))
+            i.icon?.let { icon.setImageResource(it) }
+            value.text = i.value
+            value.show(i.value.isNotEmpty())
+            // Big but never wider than the tile.
+            val chars = i.value.length.coerceAtLeast(2)
+            value.sizePx(minOf(h * if (tiny) 0.3f else 0.26f, (w * 0.86f) / (chars * 0.56f)))
+            unit.text = i.unit
+            unit.show(i.unit.isNotEmpty() && !tiny)
+            detail.text = i.detail
+            if (i.isNote) {
+                detail.sizePx(minOf(h * 0.13f, 17 * density).coerceAtLeast(11 * density))
+                detail.maxLines = ((h - 24 * density) / (detail.textSize * 1.25f)).toInt().coerceAtLeast(1)
+            } else {
+                detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                detail.maxLines = if (tile.size.isLarge) 6 else if (tile.size.rows >= 2) 3 else 1
+            }
+            detail.show(i.detail.isNotEmpty() && (!tiny || i.isNote))
+            label.text = i.label
+            label.show(prefs.showLabels && !tiny && i.label.isNotEmpty())
+            val p = i.progress
+            ring.show(p != null && !tiny)
+            if (p != null) ring.setLevel(p.coerceIn(0f, 1f))
+            backTitle.text = i.backTitle
+            backDetail.text = i.backDetail
+        }
+    }
+
+    /** Quick switches laid out to fill the tile: one per cell. */
+    inner class TogglesHolder(root: FrameLayout, frame: FrameLayout, surface: FrameLayout) : TileHolder(root, frame, surface) {
+        private val grid: LinearLayout = surface.findViewById(R.id.ll_toggles_grid)
+        private var builtFor = ""
+        private val buttons = ArrayList<Triple<String, FrameLayout, Pair<ImageView, TextView>>>()
+
+        override fun bindContent(tile: TileItem) {
+            val ids = (tile.extras["toggles"]?.split(',')?.filter { id -> QuickToggles.all.any { it.id == id } } ?: QuickToggles.defaults)
+                .take(tile.size.cols * tile.size.rows)
+            val cols = minOf(tile.size.cols, ids.size.coerceAtLeast(1))
+            val key = ids.joinToString(",") + "/" + tile.size.name + "/" + cellPitch()
+            val color = colorFor(tile)
+            if (key != builtFor) {
+                builtFor = key
+                grid.removeAllViews()
+                buttons.clear()
+                val showLabels = cellPitch() >= 64 * density && !tile.size.isTiny
+                ids.chunked(cols).forEach { rowIds ->
+                    val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+                    rowIds.forEach { id ->
+                        val cell = FrameLayout(context).apply { contentDescription = toggles.label(id) }
+                        val iv = ImageView(context)
+                        val tv = TextView(context).apply {
+                            textSize = 10f
+                            maxLines = 1
+                            ellipsize = TextUtils.TruncateAt.END
+                            gravity = Gravity.CENTER
+                            show(showLabels)
+                        }
+                        val iconPx = (minOf(cellPitch(), tileHeightPx(tile) / ceil(ids.size / cols.toFloat())) * 0.34f).toInt()
+                        cell.addView(iv, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER).apply { if (showLabels) bottomMargin = (8 * density).toInt() })
+                        cell.addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
+                            bottomMargin = (5 * density).toInt()
+                        })
+                        cell.setOnClickListener {
+                            if (!editMode) {
+                                cell.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                this.tile?.let { t -> callbacks.onToggle(t, id) }
+                            }
+                        }
+                        row.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                            val m = (3 * density).toInt()
+                            setMargins(m, m, m, m)
+                        })
+                        buttons.add(Triple(id, cell, iv to tv))
+                    }
+                    // Keep cells square-ish when the last row is short.
+                    repeat(cols - rowIds.size) { row.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f)) }
+                    grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                }
+            }
+            val radius = (maxOf(prefs.cornerRadiusDp, 6) * density)
+            buttons.forEach { (id, cell, views) ->
+                val on = toggles.isOn(id)
+                cell.background = android.graphics.drawable.RippleDrawable(
+                    ColorStateList.valueOf(0x40FFFFFF),
+                    GradientDrawable().apply {
+                        cornerRadius = radius
+                        setColor(if (on) Color.WHITE else 0x26FFFFFF)
+                    },
+                    null
+                )
+                views.first.setImageResource(toggles.icon(id))
+                views.first.imageTintList = ColorStateList.valueOf(if (on) darker(color, 0.85f).let { if (Color.alpha(it) == 0) Color.BLACK else it } else Color.WHITE)
+                views.second.text = toggles.label(id)
+                views.second.setTextColor(if (on) darker(color, 0.7f) else Color.WHITE)
+                cell.contentDescription = toggles.label(id) + if (on) ", on" else ", off"
+            }
         }
     }
 }

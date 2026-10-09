@@ -1,0 +1,5 @@
+words_en.txt: the 20,000 most frequent English words with their counts, filtered (letters only,
+offensive words removed), from FrequencyWords by Hermit Dave
+(https://github.com/hermitdave/FrequencyWords), built from OpenSubtitles 2018.
+FrequencyWords code is MIT licensed; its word lists are shared under CC BY-SA 4.0
+(https://creativecommons.org/licenses/by-sa/4.0/). This filtered list is shared under the same licence.

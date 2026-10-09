@@ -1,22 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Named tile group header; spans the full width of the grid. -->
+<!-- Named tile group header; spans the full width of the grid. Tap folds the group away. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tile_surface"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <TextView
-        android:id="@+id/tv_section_title"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|start"
-        android:ellipsize="end"
-        android:fontFamily="sans-serif-light"
-        android:maxLines="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingStart="2dp"
-        android:paddingBottom="6dp"
-        android:shadowColor="#99000000"
-        android:shadowRadius="4"
-        android:textColor="#FFFFFF"
-        android:textSize="20sp" />
+        android:paddingEnd="4dp"
+        android:paddingBottom="6dp">
+
+        <TextView
+            android:id="@+id/tv_section_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-light"
+            android:maxLines="1"
+            android:shadowColor="#99000000"
+            android:shadowRadius="4"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp" />
+
+        <TextView
+            android:id="@+id/tv_section_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:shadowColor="#99000000"
+            android:shadowRadius="4"
+            android:textColor="#CCFFFFFF"
+            android:textSize="13sp" />
+
+        <ImageView
+            android:id="@+id/iv_section_chevron"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_m_chevron_down" />
+    </LinearLayout>
 </FrameLayout>

@@ -34,6 +34,29 @@ object TileMedia {
     fun portrait(context: Context, tileId: String): File? =
         File(tileDir(context, tileId), "portrait.jpg").takeIf { it.exists() }
 
+    /** A picture the user set as a tile's background. */
+    fun cover(context: Context, tileId: String): File? =
+        File(tileDir(context, tileId), "cover.jpg").takeIf { it.exists() }
+
+    fun saveCover(context: Context, tileId: String, uri: Uri, onDone: (Boolean) -> Unit) {
+        executor.execute {
+            val dir = tileDir(context, tileId).apply { mkdirs() }
+            val ok = copyScaled(context, uri, File(dir, "cover.jpg"), 1080)
+            evictAll()
+            main.post { onDone(ok) }
+        }
+    }
+
+    fun deleteCover(context: Context, tileId: String) {
+        executor.execute {
+            File(tileDir(context, tileId), "cover.jpg").delete()
+            main.post { evictAll() }
+        }
+    }
+
+    /** Every file the launcher keeps for tiles, for backups. */
+    fun mediaRoot(context: Context): File = File(context.filesDir, "tile_media")
+
     fun backgroundFile(context: Context): File = File(context.filesDir, "start_background.jpg")
 
     fun deleteTile(context: Context, tileId: String) {
@@ -93,6 +116,8 @@ object TileMedia {
     }
 
     private fun evictAll() = cache.evictAll()
+
+    fun clearCache() = cache.evictAll()
 
     private fun decodeFile(file: File, maxSide: Int): Bitmap? {
         if (!file.exists()) return null

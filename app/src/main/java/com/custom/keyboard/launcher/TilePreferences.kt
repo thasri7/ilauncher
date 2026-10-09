@@ -14,6 +14,10 @@ import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 
 class TilePreferences(context: Context) {
+    companion object {
+        const val MAIN_SPACE = "main"
+    }
+
     private val prefs: SharedPreferences = context.getSharedPreferences("metro_launcher_prefs", Context.MODE_PRIVATE)
 
     // ── Start screen look ────────────────────────────────────────────────────────────────
@@ -74,15 +78,82 @@ class TilePreferences(context: Context) {
     /** "Suggested now" strip at the top of Start. */
     var suggestionsEnabled by boolPref("suggestions_enabled", true)
     var autoGrowEnabled by boolPref("auto_grow_enabled", true)
+    /** "flat" tiles, or "glass": a frosted sheen and a hairline edge on every tile. */
+    var tileFinish by stringPref("tile_finish", "flat")
+    /** How often live tiles flip: "slow", "normal" or "fast". */
+    var liveSpeed by stringPref("live_speed", "normal")
+    /** Pause live tiles, parallax and stack rotation while Android's battery saver is on. */
+    var batterySaverPause by boolPref("battery_saver_pause", true)
+    /** While charging, Start turns into Glance after a minute without touches. */
+    var nightstand by boolPref("nightstand", false)
+    /** Web search: "google", "bing", "duckduckgo", "brave" or "ecosia". */
+    var searchEngine by stringPref("search_engine", "google")
+    /** New folders and stacks are named after what their apps have in common. */
+    var folderAutoName by boolPref("folder_auto_name", true)
+    /** Two-finger swipe down on Start: "search", "notifications", "overview" or "none". */
+    var twoFingerAction by stringPref("gesture_two_finger", "search")
+    /** Pinch in on Start: "overview", "settings" or "none". */
+    var pinchAction by stringPref("gesture_pinch", "overview")
+    /** Swipe right on Start: "space" (next space), "search" or "none". */
+    var swipeRightAction by stringPref("gesture_swipe_right", "space")
+    var stepGoal by intPref("step_goal", 8000)
+
     /** Set once the first-run app tiles were added, so unpinning them all doesn't bring them back. */
     var appsSeeded by boolPref("apps_seeded", false)
 
     val accentColorInt: Int
         get() = try { Color.parseColor(accentColor) } catch (_: Exception) { Color.parseColor("#0050EF") }
 
+    // ── Spaces: several Start screens, each with its own tiles ───────────────────────────
+
+    data class Space(val id: String, val name: String)
+
+    var currentSpace by stringPref("current_space", MAIN_SPACE)
+
+    fun spaces(): List<Space> {
+        val list = runCatching {
+            val arr = JSONArray(prefs.getString("spaces_json", "[]"))
+            (0 until arr.length()).map { arr.getJSONObject(it).let { o -> Space(o.getString("id"), o.optString("name")) } }
+        }.getOrDefault(emptyList())
+        return if (list.none { it.id == MAIN_SPACE }) listOf(Space(MAIN_SPACE, "start")) + list else list
+    }
+
+    fun saveSpaces(spaces: List<Space>) {
+        val arr = JSONArray()
+        spaces.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        prefs.edit().putString("spaces_json", arr.toString()).apply()
+    }
+
+    fun deleteSpaceTiles(id: String) {
+        if (id != MAIN_SPACE) prefs.edit().remove(tilesKey(id)).apply()
+    }
+
+    private fun tilesKey(space: String) = if (space == MAIN_SPACE) "tiles_json" else "tiles_json_$space"
+
+    /** Tiles of every space, for "is this app pinned anywhere" and clean-up. */
+    fun tilesOf(space: String): MutableList<TileItem> {
+        val raw = prefs.getString(tilesKey(space), null) ?: return mutableListOf()
+        return runCatching { parseTiles(JSONArray(raw)) }.getOrDefault(mutableListOf())
+    }
+
+    fun saveTilesOf(space: String, tiles: List<TileItem>) {
+        prefs.edit().putString(tilesKey(space), tilesToJson(tiles).toString()).apply()
+    }
+
+    // ── Themes ──────────────────────────────────────────────────────────────────────────
+
+    /** Saved looks as JSON objects (see [MetroThemes]). */
+    var savedThemesJson by stringPref("themes_json", "[]")
+
+    // ── Steps: the step counter counts since boot, so remember where today started ──────
+
+    var stepsDay by stringPref("steps_day", "")
+    var stepsBaseline by intPref("steps_baseline", -1)
+    var stepsLast by intPref("steps_last", -1)
+
     fun loadTiles(): MutableList<TileItem> {
-        val raw = prefs.getString("tiles_json", null)
-        if (raw.isNullOrEmpty()) return getDefaultTiles()
+        val raw = prefs.getString(tilesKey(currentSpace), null)
+        if (raw.isNullOrEmpty()) return if (currentSpace == MAIN_SPACE) getDefaultTiles() else mutableListOf()
         return try {
             parseTiles(JSONArray(raw))
         } catch (_: Exception) {
@@ -125,6 +196,7 @@ class TilePreferences(context: Context) {
             appWidgetId = obj.optInt("appWidgetId", -1)
         )
         obj.optJSONArray("children")?.let { tile.children.addAll(parseTiles(it)) }
+        obj.optJSONObject("extras")?.let { ex -> ex.keys().forEach { k -> tile.extras[k] = ex.optString(k) } }
         return tile
     }
 
@@ -146,6 +218,7 @@ class TilePreferences(context: Context) {
                 put("shortcutId", tile.shortcutId ?: "")
                 put("appWidgetId", tile.appWidgetId)
                 if (tile.children.isNotEmpty()) put("children", tilesToJson(tile.children))
+                if (tile.extras.isNotEmpty()) put("extras", JSONObject(tile.extras as Map<*, *>))
             }
             arr.put(obj)
         }
@@ -153,7 +226,7 @@ class TilePreferences(context: Context) {
     }
 
     fun saveTiles(tiles: List<TileItem>) {
-        prefs.edit().putString("tiles_json", tilesToJson(tiles).toString()).apply()
+        prefs.edit().putString(tilesKey(currentSpace), tilesToJson(tiles).toString()).apply()
     }
 
     /** Launch counts for every app, pinned or not; feeds "Most used" in All apps. */
@@ -285,8 +358,10 @@ class TilePreferences(context: Context) {
         }
         editor.putBoolean("apps_seeded", true)
         editor.apply()
-        val tiles = loadTiles().filter { it.type != TileType.WIDGET }
-        saveTiles(tiles)
+        // Widget ids belong to the old install; drop those tiles in every space.
+        spaces().forEach { space ->
+            saveTilesOf(space.id, tilesOf(space.id).filter { it.type != TileType.WIDGET })
+        }
         return true
     }
 
