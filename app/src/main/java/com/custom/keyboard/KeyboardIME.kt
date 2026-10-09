@@ -150,9 +150,6 @@ class KeyboardIME : InputMethodService() {
     private val symbolsRow2 = listOf("!", "@", "#", "$", "%", "^", "&", "*", "(", ")")
     private val symbolsRow3 = listOf("-", "'", "\"", ":", ";", "?", "`", "~")
 
-    private val emojiRow1 = listOf("😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇")
-    private val emojiRow2 = listOf("😍", "🥰", "😘", "😋", "😜", "🤔", "🤫", "😎", "🥳", "🤩")
-    private val emojiRow3 = listOf("👍", "👎", "👏", "🙌", "🤝", "🔥", "✨", "💯", "❤️", "🚀")
 
     override fun onCreate() {
         super.onCreate()
@@ -245,6 +242,11 @@ class KeyboardIME : InputMethodService() {
             closeFeatureDrawer()
             keyPopupPreview.visibility = View.GONE
             applyColorTheme()
+            // Pick up settings changed while the keyboard was hidden (language, rows…).
+            if (!restarting) {
+                if (currentMode == KeyboardMode.EMOJI) currentMode = KeyboardMode.LETTERS
+                renderKeyboard()
+            }
             updateKeyCase()
             updateSmartIdleBar()
         }
@@ -261,17 +263,24 @@ class KeyboardIME : InputMethodService() {
         }
     }
 
+    /**
+     * Key face: the long-press symbol small in the top-right corner, the letter big below it,
+     * like most phone keyboards.
+     */
     private fun buildKeyLabel(displayChar: String, secondary: String?): CharSequence {
         if (secondary == null) return displayChar
         val ssb = SpannableStringBuilder()
-        ssb.append(displayChar)
-        val start = ssb.length
         ssb.append(secondary)
         val end = ssb.length
         val hintColor = ContextCompat.getColor(this, R.color.kb_hint_color)
-        ssb.setSpan(RelativeSizeSpan(0.55f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        ssb.setSpan(SuperscriptSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        ssb.setSpan(ForegroundColorSpan(hintColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ssb.setSpan(RelativeSizeSpan(0.5f), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ssb.setSpan(ForegroundColorSpan(hintColor), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ssb.append("\n")
+        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_OPPOSITE), 0, ssb.length, Spanned.SPAN_INCLUSIVE_EXCLUSIVE)
+        val start = ssb.length
+        ssb.append(displayChar)
+        ssb.setSpan(RelativeSizeSpan(1.05f), start, ssb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ssb.setSpan(android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_CENTER), start, ssb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         return ssb
     }
 
@@ -935,6 +944,11 @@ class KeyboardIME : InputMethodService() {
     }
 
     private fun renderKeyboard() {
+        emojiPanel?.let { keysWrapper.removeView(it) }
+        emojiPanel = null
+        row1.visibility = View.VISIBLE
+        row2.visibility = View.VISIBLE
+        row3.visibility = View.VISIBLE
         rowNumbers.removeAllViews()
         row1.removeAllViews()
         row2.removeAllViews()
@@ -1193,16 +1207,17 @@ class KeyboardIME : InputMethodService() {
         row4.addView(createEnterKey(weight = 1.5f))
     }
 
+    /** Full emoji panel (every emoji, by category, recent first) where the letter rows were. */
+    private var emojiPanel: EmojiPanel? = null
+
     private fun renderEmojiMode() {
-        for (emoji in emojiRow1) {
-            row1.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
-        }
-        for (emoji in emojiRow2) {
-            row2.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
-        }
-        for (emoji in emojiRow3) {
-            row3.addView(createKey(emoji, weight = 1f) { commitEmoji(emoji) })
-        }
+        row1.visibility = View.GONE
+        row2.visibility = View.GONE
+        row3.visibility = View.GONE
+        val panel = EmojiPanel(this, { prefs.recentEmojis }) { emoji -> commitEmoji(emoji) }
+        emojiPanel = panel
+        val rowsHeight = (prefs.rowHeightDp * resources.displayMetrics.density).toInt() * if (prefs.showNumberRow) 4 else 3
+        keysWrapper.addView(panel, keysWrapper.indexOfChild(row4), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowsHeight))
 
         row4.addView(createActionKey("ABC", weight = 1.5f) {
             currentMode = KeyboardMode.LETTERS
@@ -1287,12 +1302,18 @@ class KeyboardIME : InputMethodService() {
         }
         row4.addView(modeKey)
 
-        val langLabel = if (isPrimaryLang) "🌐 ${prefs.secondaryLanguage.uppercase()}" else "🌐 EN"
-        val langToggleKey = createActionKey(langLabel, weight = 1.3f) {
-            isPrimaryLang = !isPrimaryLang
-            renderKeyboard()
+        // With no second language the globe key goes and the space bar takes its room.
+        val hasSecondLanguage = prefs.secondaryLanguage != "none"
+        if (hasSecondLanguage) {
+            val langLabel = if (isPrimaryLang) "🌐 ${prefs.secondaryLanguage.uppercase()}" else "🌐 EN"
+            val langToggleKey = createActionKey(langLabel, weight = 1.3f) {
+                isPrimaryLang = !isPrimaryLang
+                renderKeyboard()
+            }
+            row4.addView(langToggleKey)
+        } else {
+            isPrimaryLang = true
         }
-        row4.addView(langToggleKey)
 
         val emojiKey = createActionKey("😀", weight = 0.9f) {
             currentMode = KeyboardMode.EMOJI
@@ -1306,7 +1327,7 @@ class KeyboardIME : InputMethodService() {
         }
         row4.addView(commaKey)
 
-        val spaceKey = createSpacebarKey(weight = 3.5f)
+        val spaceKey = createSpacebarKey(weight = if (hasSecondLanguage) 3.5f else 4.8f)
         row4.addView(spaceKey)
 
         val periodKey = createKey(".", weight = 0.8f) {
@@ -1356,7 +1377,16 @@ class KeyboardIME : InputMethodService() {
             typeface = getSelectedTypeface()
             background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_key)
             isAllCaps = false
-            setPadding(0, 0, 0, 0)
+            tag = baseChar
+            if (secondary != null) {
+                // Two lines (symbol, letter) packed tight so both fit any key height.
+                includeFontPadding = false
+                setLineSpacing(0f, 0.82f)
+                gravity = Gravity.CENTER
+                setPadding(0, 0, (5 * resources.displayMetrics.density).toInt(), (2 * resources.displayMetrics.density).toInt())
+            } else {
+                setPadding(0, 0, 0, 0)
+            }
         }
 
         var startX = 0f
@@ -1486,7 +1516,8 @@ class KeyboardIME : InputMethodService() {
                         val childLoc = IntArray(2)
                         child.getLocationOnScreen(childLoc)
                         if (rawX >= childLoc[0] && rawX <= childLoc[0] + child.width) {
-                            return child.text.firstOrNull()
+                            // The letter is kept in the tag; the face also shows a symbol.
+                            return (child.tag as? String)?.firstOrNull() ?: child.text.lastOrNull()
                         }
                     }
                 }
@@ -1496,12 +1527,12 @@ class KeyboardIME : InputMethodService() {
     }
 
     private fun createSpacebarKey(weight: Float): Button {
-        val langLabel = if (isPrimaryLang) "EN" else prefs.secondaryLanguage.uppercase()
+        val langLabel = if (prefs.secondaryLanguage == "none") "" else if (isPrimaryLang) "EN" else prefs.secondaryLanguage.uppercase()
         val btn = Button(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
                 setMargins(2, 2, 2, 2)
             }
-            text = "Space  •  $langLabel"
+            text = if (langLabel.isEmpty()) "Space" else "Space  •  $langLabel"
             setTextColor(ContextCompat.getColor(this@KeyboardIME, R.color.kb_text_secondary))
             textSize = 13f
             background = ContextCompat.getDrawable(this@KeyboardIME, R.drawable.bg_key)

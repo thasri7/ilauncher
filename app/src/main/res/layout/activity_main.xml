@@ -188,6 +188,15 @@
             android:layout_marginBottom="20dp">
 
             <RadioButton
+                android:id="@+id/rb_lang_none"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="0.8"
+                android:text="None"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="13sp" />
+
+            <RadioButton
                 android:id="@+id/rb_lang_arabic"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"

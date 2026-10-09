@@ -80,12 +80,14 @@ class MainActivity : AppCompatActivity() {
         // 1c. Secondary Language
         val rgSecondaryLang = findViewById<RadioGroup>(R.id.rg_secondary_lang)
         when (prefs.secondaryLanguage) {
+            "none" -> rgSecondaryLang.check(R.id.rb_lang_none)
             "fr" -> rgSecondaryLang.check(R.id.rb_lang_french)
             "es" -> rgSecondaryLang.check(R.id.rb_lang_spanish)
             else -> rgSecondaryLang.check(R.id.rb_lang_arabic)
         }
         rgSecondaryLang.setOnCheckedChangeListener { _, checkedId ->
             when (checkedId) {
+                R.id.rb_lang_none -> prefs.secondaryLanguage = "none"
                 R.id.rb_lang_french -> prefs.secondaryLanguage = "fr"
                 R.id.rb_lang_spanish -> prefs.secondaryLanguage = "es"
                 else -> prefs.secondaryLanguage = "ar"

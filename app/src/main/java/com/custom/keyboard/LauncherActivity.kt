@@ -792,8 +792,22 @@ class LauncherActivity : AppCompatActivity() {
     private fun applyTilesPadding(rv: RecyclerView) {
         val side = ui.dp(8)
         val strip = suggestionsStrip?.takeIf { it.visibility == View.VISIBLE }
-        val top = if (strip != null) strip.measuredHeight.takeIf { it > 0 } ?: ui.dp(88) else ui.dp(4)
+        // Under the suggestions, the same gap as between tiles plus a little air.
+        val top = if (strip != null) (strip.measuredHeight.takeIf { it > 0 } ?: ui.dp(88)) + ui.dp(prefs.gutterDp) + ui.dp(6) else ui.dp(4)
         rv.setPadding(side + systemInsets.left, top, side + systemInsets.right, systemInsets.bottom + ui.dp(96))
+    }
+
+    private fun showSuggestionsMenu(anchor: View) {
+        val card = ui.card()
+        card.addView(ui.header("Suggested now", "Apps you usually open at this time of day"))
+        card.addView(ui.action(R.drawable.ic_m_close, "Hide suggestions", "Turn back on in Settings › Start") {
+            metroOverlay.dismiss()
+            prefs.suggestionsEnabled = false
+            refreshSuggestions(force = true)
+            toast("Suggestions hidden")
+        })
+        card.addView(ui.action(R.drawable.ic_m_settings, "Start settings") { settingsPage.show("start") })
+        metroOverlay.show(card, MetroOverlay.Style.POPUP, anchor)
     }
 
     /** "Suggested now": apps you usually open around this hour, as small tiles above Start. */
@@ -816,7 +830,10 @@ class LauncherActivity : AppCompatActivity() {
             applyTilesPadding(rv)
             return
         }
-        strip.findViewById<TextView>(R.id.tv_suggestions_title).text = "suggested · ${Suggestions.partOfDay(hour)}"
+        strip.findViewById<TextView>(R.id.tv_suggestions_title).apply {
+            text = "suggested · ${Suggestions.partOfDay(hour)}  ⌄"
+            setOnClickListener { showSuggestionsMenu(this) }
+        }
         val pitch = gridLayoutManager.cellPitch.takeIf { it > 0f } ?: (rv.width - ui.dp(16)) / columns.toFloat()
         val gutter = ui.dp(prefs.gutterDp)
         val size = (pitch - gutter).toInt()

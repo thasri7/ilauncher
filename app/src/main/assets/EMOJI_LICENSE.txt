@@ -1,0 +1,2 @@
+emoji.txt: emoji list, order, categories and names from emoji-data by Cal Henderson
+(https://github.com/iamcal/emoji-data), MIT License.
