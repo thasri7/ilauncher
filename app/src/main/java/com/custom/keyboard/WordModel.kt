@@ -103,8 +103,11 @@ class WordModel {
         val p = prefix.lowercase()
         if (p.isEmpty()) return emptyList()
         val list = byFirst[p[0]] ?: return emptyList()
-        return list.asSequence().filter { it.length > p.length && it.startsWith(p) }
-            .sortedByDescending { score(it) }.take(max).toList()
+        // Lists are kept most-common first, so the best matches are near the front: look at the
+        // first few dozen plus your own words instead of sorting every match on each key press.
+        val common = list.asSequence().filter { it.length > p.length && it.startsWith(p) }.take(40)
+        val mine = learned.keys.asSequence().filter { it.length > p.length && it.startsWith(p) && contains(it) }
+        return (common + mine).distinct().sortedByDescending { score(it) }.take(max).toList()
     }
 
     /** Close spellings of a word not in the list (1 edit, 2 for long words), most likely first. */

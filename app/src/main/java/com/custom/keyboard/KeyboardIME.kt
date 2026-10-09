@@ -908,11 +908,14 @@ class KeyboardIME : InputMethodService() {
         // Float immediately above the keycap (with small overlap for natural finger sightline)
         val topY = (relativeTop - popupHeight + (10 * resources.displayMetrics.density).toInt()).coerceAtLeast(0)
 
-        val params = FrameLayout.LayoutParams(popupWidth, popupHeight).apply {
-            leftMargin = centerX.coerceAtLeast(0)
-            topMargin = topY
+        // Moved with translation, not margins: changing layout params re-laid out the whole
+        // keyboard on every key press, which made fast typing lag.
+        val lp = keyPopupPreview.layoutParams as? FrameLayout.LayoutParams
+        if (lp == null || lp.leftMargin != 0 || lp.topMargin != 0 || lp.width != popupWidth || lp.height != popupHeight) {
+            keyPopupPreview.layoutParams = FrameLayout.LayoutParams(popupWidth, popupHeight)
         }
-        keyPopupPreview.layoutParams = params
+        keyPopupPreview.translationX = centerX.coerceAtLeast(0).toFloat()
+        keyPopupPreview.translationY = topY.toFloat()
         keyPopupPreview.visibility = View.VISIBLE
     }
 
@@ -1359,11 +1362,16 @@ class KeyboardIME : InputMethodService() {
             symbol = secondary
         }
 
-        var startX = 0f
-        var startY = 0f
+        // Everything below belongs to this key alone, so fast two-finger typing (the next key
+        // pressed before this one is let go) never mixes up the two presses.
+        var downX = 0f
+        var downY = 0f
         var isLongPressed = false
+        var gliding = false
+        val path = ArrayList<Char>()
+        val keyRect = android.graphics.Rect()
         val longPressRunnable = Runnable {
-            if (!secondary.isNullOrEmpty() && !isGliding) {
+            if (!secondary.isNullOrEmpty() && !gliding) {
                 isLongPressed = true
                 feedback(btn)
                 commitCharacter(secondary)
@@ -1374,32 +1382,39 @@ class KeyboardIME : InputMethodService() {
         btn.setOnTouchListener { v, event ->
             val isUpper = isShifted || isCapsLock
             val charLetter = if (isUpper) baseChar.uppercase() else baseChar.lowercase()
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.x
-                    startY = event.y
+                    downX = event.rawX
+                    downY = event.rawY
                     isLongPressed = false
-                    isGliding = false
-                    glideChars.clear()
-                    baseChar.firstOrNull()?.let { glideChars.add(it) }
+                    gliding = false
+                    path.clear()
+                    baseChar.firstOrNull()?.let { path.add(it) }
+                    v.getGlobalVisibleRect(keyRect)
                     showKeyPopup(btn, charLetter)
                     feedback(v)
                     handler.postDelayed(longPressRunnable, prefs.longPressDelayMs)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = abs(event.x - startX)
-                    val dy = abs(event.y - startY)
-                    if (prefs.glideTyping && (dx > 30f || dy > 30f || isGliding)) {
-                        handler.removeCallbacks(longPressRunnable)
-                        hideKeyPopup()
-                        if (!isGliding) glideTrail.start(keysWrapper, event.rawX, event.rawY, prefs.glideTrail)
-                        isGliding = true
-                        glideTrail.add(event.rawX, event.rawY)
-                        val touchedChar = findKeyCharUnderTouch(event.rawX, event.rawY)
-                        if (touchedChar != null && (glideChars.isEmpty() || glideChars.last() != touchedChar)) {
-                            glideChars.add(touchedChar)
+                    // A swipe starts only once the finger has clearly left this key: sloppy
+                    // fast taps that slide a little stay taps.
+                    if (prefs.glideTyping && !gliding) {
+                        val slop = keyRect.width() * 0.25f
+                        val outside = event.rawX < keyRect.left - slop || event.rawX > keyRect.right + slop ||
+                            event.rawY < keyRect.top - slop || event.rawY > keyRect.bottom + slop
+                        if (outside && kotlin.math.hypot(event.rawX - downX, event.rawY - downY) > keyRect.width() * 0.9f) {
+                            gliding = true
+                            isGliding = true
+                            handler.removeCallbacks(longPressRunnable)
+                            hideKeyPopup()
+                            glideTrail.start(keysWrapper, downX, downY, prefs.glideTrail)
                         }
+                    }
+                    if (gliding) {
+                        glideTrail.add(event.rawX, event.rawY)
+                        val touchedChar = findKeyCharUnderTouch(event.rawX, event.rawY)?.lowercaseChar()
+                        if (touchedChar != null && path.lastOrNull() != touchedChar) path.add(touchedChar)
                     }
                     true
                 }
@@ -1409,9 +1424,10 @@ class KeyboardIME : InputMethodService() {
                     if (isLongPressed) {
                         return@setOnTouchListener true
                     }
-                    glideTrail.finish()
-                    if (isGliding && glideChars.size >= 2) {
-                        val guesses = dictionary.glideCandidates(glideChars)
+                    if (gliding) glideTrail.finish()
+                    isGliding = false
+                    if (gliding && path.size >= 2) {
+                        val guesses = dictionary.glideCandidates(path)
                         val matchedWord = guesses.firstOrNull()
                         if (!matchedWord.isNullOrEmpty()) {
                             feedback(v)
@@ -1430,17 +1446,13 @@ class KeyboardIME : InputMethodService() {
                                 isShifted = false
                                 updateKeyCase()
                             }
-                            glideChars.clear()
-                            isGliding = false
+                            gliding = false
                             return@setOnTouchListener true
                         }
                     }
-                    if (isGliding) {
-                        // A swipe that matched no word types nothing.
-                        glideChars.clear()
-                        isGliding = false
-                        return@setOnTouchListener true
-                    }
+                    // No word for the swipe (or just a tap): type the key's own letter, so
+                    // nothing pressed is ever lost.
+                    gliding = false
 
                     val formatted = formatWithFancyStyle(charLetter)
                     commitCharacter(formatted)
@@ -1450,15 +1462,13 @@ class KeyboardIME : InputMethodService() {
                         isShifted = false
                         updateKeyCase() // In-place smooth update without view destruction!
                     }
-                    glideChars.clear()
-                    isGliding = false
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(longPressRunnable)
                     hideKeyPopup()
-                    glideTrail.finish()
-                    glideChars.clear()
+                    if (gliding) glideTrail.finish()
+                    gliding = false
                     isGliding = false
                     true
                 }
@@ -1760,14 +1770,14 @@ class KeyboardIME : InputMethodService() {
             try {
                 // View haptic with flag override
                 view.isHapticFeedbackEnabled = true
-                view.performHapticFeedback(
+                val done = view.performHapticFeedback(
                     HapticFeedbackConstants.KEYBOARD_TAP,
                     HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING or HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
                 )
 
-                // Direct actuator pulse (crisp 18ms tap for Huawei P70 Ultra)
+                // Direct actuator pulse only when the view haptic didn't fire (one buzz per key).
                 val vib = vibrator
-                if (vib != null && vib.hasVibrator()) {
+                if (!done && vib != null && vib.hasVibrator()) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         vib.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
                     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -68,10 +68,11 @@ object NotificationHub {
 
     private fun CharSequence?.text() = this?.toString().orEmpty()
 
-    internal fun publish(notifications: Array<StatusBarNotification>) {
+    internal fun publish(notifications: Array<StatusBarNotification>, keyOf: (StatusBarNotification) -> String = { it.packageName }) {
+        // Cloned and work-profile apps get their own key ("package#profile"), like their tiles.
         val grouped = notifications
             .filter { it.isClearable && it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
-            .groupBy { it.packageName }
+            .groupBy(keyOf)
         entries = grouped.mapValues { (_, list) ->
             val items = list.sortedByDescending { it.postTime }.map { sbn ->
                 val extras = sbn.notification.extras
@@ -117,7 +118,9 @@ class TileNotificationListener : NotificationListenerService() {
 
     private fun refresh() {
         try {
-            NotificationHub.publish(activeNotifications ?: emptyArray())
+            NotificationHub.publish(activeNotifications ?: emptyArray()) { sbn ->
+                com.custom.keyboard.AppKeys.keyFor(this, sbn.packageName, sbn.user)
+            }
         } catch (_: Exception) {
             // The listener can be unbound between the callback and this call.
         }

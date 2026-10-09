@@ -38,6 +38,18 @@ class IconCache(private val context: Context) {
     }
 
     private fun load(packageName: String): Drawable? = loaded[packageName] ?: run {
+        if (com.custom.keyboard.AppKeys.isClone(packageName)) {
+            // A cloned / work-profile app: the system icon with its profile badge.
+            val pkg = com.custom.keyboard.AppKeys.pkg(packageName)
+            val user = com.custom.keyboard.AppKeys.user(context, packageName)
+            val icon = try {
+                context.getSystemService(android.content.pm.LauncherApps::class.java)
+                    ?.getActivityList(pkg, user)?.firstOrNull()?.getBadgedIcon(0)
+            } catch (_: Exception) {
+                null
+            }
+            return@run icon?.also { loaded[packageName] = it; fromPack.remove(packageName) }
+        }
         val packIcon = pack?.let { p ->
             val activity = try {
                 packageManager.getLaunchIntentForPackage(packageName)?.component?.className
@@ -104,7 +116,7 @@ class IconCache(private val context: Context) {
     fun themedIcon(packageName: String?): Drawable? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || packageName == null) return null
         val base = load(packageName) ?: return null
-        if (packageName in fromPack) return null
+        if (packageName in fromPack || com.custom.keyboard.AppKeys.isClone(packageName)) return null
         val adaptive = base as? AdaptiveIconDrawable ?: return null
         val mono = (copyOf(adaptive) as? AdaptiveIconDrawable)?.monochrome ?: return null
         return mono.mutate().apply { setTint(Color.WHITE) }

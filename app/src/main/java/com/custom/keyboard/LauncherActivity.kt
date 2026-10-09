@@ -253,6 +253,26 @@ class LauncherActivity : AppCompatActivity() {
         }
     }
 
+    /** Clones and work-profile apps don't send package broadcasts to us; LauncherApps tells us. */
+    private val profileApps = object : android.content.pm.LauncherApps.Callback() {
+        private fun changed(pkg: String?, user: android.os.UserHandle?, removed: Boolean) {
+            if (user == null || user == android.os.Process.myUserHandle()) return
+            val key = pkg?.let { AppKeys.keyFor(this@LauncherActivity, it, user) }
+            if (removed && key != null) removeTilesFor(key)
+            icons.clear()
+            appHelper.reload()
+            allApps = appHelper.getAllApps()
+            refreshDrawer()
+            refreshTextPage()
+            tileAdapter.refreshIcons()
+        }
+        override fun onPackageRemoved(packageName: String?, user: android.os.UserHandle?) = changed(packageName, user, true)
+        override fun onPackageAdded(packageName: String?, user: android.os.UserHandle?) = changed(packageName, user, false)
+        override fun onPackageChanged(packageName: String?, user: android.os.UserHandle?) = changed(packageName, user, false)
+        override fun onPackagesAvailable(packageNames: Array<out String>?, user: android.os.UserHandle?, replacing: Boolean) = changed(null, user, false)
+        override fun onPackagesUnavailable(packageNames: Array<out String>?, user: android.os.UserHandle?, replacing: Boolean) = changed(null, user, false)
+    }
+
     private val notificationsChanged: () -> Unit = {
         tileAdapter.onNotificationsChanged()
         if (pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) refreshTextPage()
@@ -482,6 +502,7 @@ class LauncherActivity : AppCompatActivity() {
         }
         ContextCompat.registerReceiver(this, packageReceiver, packageFilter, ContextCompat.RECEIVER_EXPORTED)
         ContextCompat.registerReceiver(this, userPresentReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), ContextCompat.RECEIVER_EXPORTED)
+        runCatching { getSystemService(android.content.pm.LauncherApps::class.java)?.registerCallback(profileApps, handler) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             (wallpaperColorsListener as? WallpaperManager.OnColorsChangedListener)?.let {
                 WallpaperManager.getInstance(this).addOnColorsChangedListener(it, handler)
@@ -1083,7 +1104,14 @@ class LauncherActivity : AppCompatActivity() {
     private fun setupChrome() {
         findViewById<View>(R.id.btn_open_search).setOnClickListener { openSearch() }
         btnTogglePage.setOnClickListener { togglePage() }
-        findViewById<View>(R.id.btn_open_settings).setOnClickListener { v -> showStartMenu(v) }
+        findViewById<View>(R.id.btn_open_settings).setOnClickListener { v ->
+            // Each page has its own ⋯ menu.
+            when (pager.currentItem) {
+                LauncherPagerAdapter.PAGE_DRAWER -> showDrawerPageMenu(v)
+                LauncherPagerAdapter.PAGE_TEXT -> showTextPageMenu(v)
+                else -> showStartMenu(v)
+            }
+        }
         findViewById<View>(R.id.btn_edit_add).setOnClickListener { showAddTileSheet() }
         findViewById<View>(R.id.btn_edit_done).setOnClickListener { tileAdapter.exitEditMode() }
     }
@@ -1541,6 +1569,18 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun launchApp(packageName: String, source: View?) {
+        if (AppKeys.isClone(packageName)) {
+            // Cloned / work-profile apps open in their own profile.
+            prefs.recordAppLaunch(packageName, tiles)?.let { pendingRestyles.add(it.id) }
+            launchWithMotion(source) { options ->
+                val bounds = source?.let { Rect().also { r -> it.getGlobalVisibleRect(r) } }
+                appHelper.start(packageName, bounds, options) || run {
+                    toast("That app isn't available")
+                    false
+                }
+            }
+            return
+        }
         val intent = appHelper.launchIntentFor(packageName)
         if (intent == null) {
             toast("That app isn't available")
@@ -2139,6 +2179,98 @@ class LauncherActivity : AppCompatActivity() {
         card.addView(ui.action(R.drawable.ic_m_palette, "Themes", "Change the whole look in one tap") { settingsPage.show("themes") })
         card.addView(ui.action(R.drawable.ic_m_settings, "Settings") { settingsPage.show() })
         metroOverlay.show(card, if (anchor != null) MetroOverlay.Style.POPUP else MetroOverlay.Style.SHEET, anchor)
+    }
+
+    /** ⋯ on All apps: how the list looks and sorts, private apps, jump to a letter. */
+    private fun showDrawerPageMenu(anchor: View) {
+        val card = ui.card()
+        card.addView(ui.header("All apps", "${visibleApps().size} apps"))
+        card.addView(ui.sectionTitle("Layout"))
+        card.addView(ui.chips(listOf("List", "Grid"), if (prefs.drawerStyle == "grid") 1 else 0) { i ->
+            prefs.drawerStyle = if (i == 1) "grid" else "list"
+            settingsHost.applyDrawerSettings()
+        })
+        val sorts = listOf("az", "used", "recent")
+        card.addView(ui.sectionTitle("Order"))
+        card.addView(ui.chips(listOf("A to Z", "Most used", "Newest"), sorts.indexOf(prefs.drawerSort).coerceAtLeast(0)) { i ->
+            prefs.drawerSort = sorts[i]
+            settingsHost.applyDrawerSettings()
+        })
+        card.addView(ui.toggleRow("Recently added", "New apps at the top for a few days", prefs.showRecentlyAdded) {
+            prefs.showRecentlyAdded = it
+            settingsHost.applyDrawerSettings()
+        })
+        card.addView(ui.divider())
+        card.addView(ui.action(R.drawable.ic_m_search, "Find an app") {
+            metroOverlay.dismiss()
+            etDrawerSearch?.let { s ->
+                s.requestFocus()
+                getSystemService(InputMethodManager::class.java)?.showSoftInput(s, InputMethodManager.SHOW_IMPLICIT)
+            }
+        })
+        card.addView(ui.action(R.drawable.ic_m_title, "Jump to a letter") { metroOverlay.dismiss(); showJumpList() })
+        card.addView(ui.action(R.drawable.ic_m_lock, "Private apps", "${prefs.hiddenApps.size} hidden") { metroOverlay.dismiss(); unlockPrivateApps() })
+        card.addView(ui.action(R.drawable.ic_m_settings, "All apps settings") { settingsPage.show("apps") })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    /** ⋯ on the Text page: order, sizing, colours and what the page shows. */
+    private fun showTextPageMenu(anchor: View) {
+        val card = ui.card()
+        card.addView(ui.header("Text page", "Names sized by how much you use them"))
+        val apply = { settingsHost.applyTextPageSettings() }
+        val orders = listOf("az", "use", "size")
+        card.addView(ui.sectionTitle("Order"))
+        card.addView(ui.chips(listOf("A to Z", "Most used", "Biggest first"), orders.indexOf(prefs.textOrder).coerceAtLeast(0)) { i ->
+            prefs.textOrder = orders[i]
+            apply()
+        })
+        card.addView(ui.sectionTitle("Sizes"))
+        card.addView(ui.chips(listOf("By use", "All the same"), if (prefs.textSizing == "equal") 1 else 0) { i ->
+            prefs.textSizing = if (i == 1) "equal" else "use"
+            apply()
+        })
+        val colors = listOf("accent", "white", "app", "heat")
+        card.addView(ui.sectionTitle("Colour"))
+        card.addView(ui.chips(listOf("Accent", "White", "App", "Usage"), colors.indexOf(prefs.textColor).coerceAtLeast(0)) { i ->
+            prefs.textColor = colors[i]
+            apply()
+        })
+        val aligns = listOf("start", "center", "end")
+        card.addView(ui.sectionTitle("Line up"))
+        card.addView(ui.chips(listOf("Left", "Centre", "Right"), aligns.indexOf(prefs.textAlign).coerceAtLeast(0)) { i ->
+            prefs.textAlign = aligns[i]
+            apply()
+        })
+        card.addView(ui.toggleRow("Search box", null, prefs.textSearch) { prefs.textSearch = it; apply() })
+        card.addView(ui.toggleRow("Letter strip", null, prefs.textLetterStrip) { prefs.textLetterStrip = it; apply() })
+        card.addView(ui.toggleRow("Notification marks", null, prefs.textNotify) { prefs.textNotify = it; apply() })
+        card.addView(ui.divider())
+        val hidden = prefs.textOverrides().filterValues { it.hidden }.keys
+        if (hidden.isNotEmpty()) card.addView(ui.action(R.drawable.ic_m_close, "Hidden names", "${hidden.size} hidden from this page") { showTextHiddenNames() })
+        card.addView(ui.action(R.drawable.ic_m_reset, "Reset name sizes", "Count use from now; big tiles stay big") {
+            metroOverlay.dismiss()
+            settingsHost.resetTextSizes()
+        })
+        card.addView(ui.action(R.drawable.ic_m_settings, "Text page settings", "Fonts, sizes, opacity, background…") { settingsPage.show("text") })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun showTextHiddenNames() {
+        val card = ui.card()
+        card.addView(ui.header("Hidden names", "They still come up when you search"))
+        val overrides = prefs.textOverrides()
+        overrides.filterValues { it.hidden }.keys.mapNotNull { key -> allApps.firstOrNull { it.packageName == key } }.forEach { app ->
+            card.addView(ui.actionWithIcon(icons.icon(app.packageName), app.name, null, R.drawable.ic_m_move_out, "Show again", onTrailing = {
+                prefs.setTextOverride(app.packageName, (overrides[app.packageName] ?: TilePreferences.TextOverride()).copy(hidden = false))
+                refreshTextPage()
+                metroOverlay.dismiss()
+            }) {
+                metroOverlay.dismiss()
+                launchApp(app.packageName, null)
+            })
+        }
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
     }
 
     /** Shortcut rows for an app, each with a pin button. */
@@ -2896,6 +3028,7 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun openAppInfo(packageName: String) {
+        if (AppKeys.isClone(packageName) && appHelper.showDetails(packageName)) return
         try {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
         } catch (_: Exception) {
@@ -2904,6 +3037,11 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun uninstall(packageName: String) {
+        // A clone is removed from its own app info page.
+        if (AppKeys.isClone(packageName)) {
+            openAppInfo(packageName)
+            return
+        }
         try {
             startActivity(Intent(Intent.ACTION_DELETE, Uri.fromParts("package", packageName, null)))
         } catch (_: Exception) {
@@ -3177,7 +3315,7 @@ class LauncherActivity : AppCompatActivity() {
             tiles.clear()
             tiles.addAll(prefs.loadTiles())
             // Apps uninstalled while this space wasn't showing.
-            tiles.removeAll { it.type == TileType.APP_SHORTCUT && it.packageName != null && appHelper.launchIntentFor(it.packageName!!) == null }
+            tiles.removeAll { it.type == TileType.APP_SHORTCUT && it.packageName != null && !appHelper.isInstalled(it.packageName!!) }
             tileAdapter.notifyDataSetChanged()
             rv?.scrollToPosition(0)
             swapTitle(spaceName())
@@ -3353,6 +3491,12 @@ class LauncherActivity : AppCompatActivity() {
             newGroup()
         })
         page.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Tidy, sort or group by kind") { showArrange() })
+        if (tiles.any { it.type == TileType.SECTION_HEADER }) {
+            page.addView(ui.action(R.drawable.ic_m_close, "Remove all groups", "Keep every tile, drop the group names") {
+                metroOverlay.dismiss()
+                applyArrangement(tiles.filter { it.type != TileType.SECTION_HEADER }, "Groups removed")
+            })
+        }
         metroOverlay.show(ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             addView(page)
@@ -3445,6 +3589,13 @@ class LauncherActivity : AppCompatActivity() {
             metroOverlay.dismiss()
             applyArrangement(StartArranger.byCategory(tiles, { AppCategories.of(this, it.packageName, it.title) }, launches), "Grouped by kind")
         })
+        val groupCount = tiles.count { it.type == TileType.SECTION_HEADER }
+        if (groupCount > 0) {
+            card.addView(ui.action(R.drawable.ic_m_close, "Remove all groups", "$groupCount group names go; every tile stays where it is") {
+                metroOverlay.dismiss()
+                applyArrangement(tiles.filter { it.type != TileType.SECTION_HEADER }, "Groups removed")
+            })
+        }
         card.addView(ui.action(R.drawable.ic_m_add, "Grow what I use", "Often used apps get bigger tiles; sizes you set stay") {
             metroOverlay.dismiss()
             val before = tiles.map { it.size }
@@ -3700,6 +3851,7 @@ class LauncherActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         media.stop()
+        runCatching { getSystemService(android.content.pm.LauncherApps::class.java)?.unregisterCallback(profileApps) }
         try {
             unregisterReceiver(packageReceiver)
             unregisterReceiver(userPresentReceiver)

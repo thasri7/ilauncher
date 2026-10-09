@@ -6,7 +6,6 @@ import android.content.pm.ShortcutInfo
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.os.Process
 
 /**
  * App shortcuts ("New message", "Navigate home"…) through LauncherApps. Android only grants
@@ -14,7 +13,6 @@ import android.os.Process
  */
 class AppShortcuts(private val context: Context) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
-    private val user = Process.myUserHandle()
 
     val isAvailable: Boolean
         get() = try {
@@ -26,7 +24,7 @@ class AppShortcuts(private val context: Context) {
     private fun query(packageName: String, ids: List<String>? = null): List<ShortcutInfo> {
         if (!isAvailable) return emptyList()
         val q = LauncherApps.ShortcutQuery()
-            .setPackage(packageName)
+            .setPackage(com.custom.keyboard.AppKeys.pkg(packageName))
             .setQueryFlags(
                 LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
                     LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
@@ -34,7 +32,7 @@ class AppShortcuts(private val context: Context) {
             )
         if (ids != null) q.setShortcutIds(ids)
         return try {
-            launcherApps?.getShortcuts(q, user).orEmpty()
+            launcherApps?.getShortcuts(q, com.custom.keyboard.AppKeys.user(context, packageName)).orEmpty()
         } catch (_: Exception) {
             emptyList()
         }
@@ -56,7 +54,7 @@ class AppShortcuts(private val context: Context) {
     }
 
     fun start(packageName: String, id: String, sourceBounds: Rect?, options: Bundle?): Boolean = try {
-        launcherApps?.startShortcut(packageName, id, sourceBounds, options, user)
+        launcherApps?.startShortcut(com.custom.keyboard.AppKeys.pkg(packageName), id, sourceBounds, options, com.custom.keyboard.AppKeys.user(context, packageName))
         launcherApps != null
     } catch (_: Exception) {
         false
@@ -69,7 +67,7 @@ class AppShortcuts(private val context: Context) {
     fun syncPinned(packageName: String, ids: List<String>) {
         if (!isAvailable) return
         try {
-            launcherApps?.pinShortcuts(packageName, ids, user)
+            launcherApps?.pinShortcuts(com.custom.keyboard.AppKeys.pkg(packageName), ids, com.custom.keyboard.AppKeys.user(context, packageName))
         } catch (_: Exception) {
         }
     }
