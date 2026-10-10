@@ -288,12 +288,23 @@ class TilePreferences(context: Context) {
     fun loadTiles(): MutableList<TileItem> {
         val raw = prefs.getString(tilesKey(currentSpace), null)
         if (raw.isNullOrEmpty()) return if (currentSpace == MAIN_SPACE) getDefaultTiles() else mutableListOf()
-        return try {
+        val list = try {
             parseTiles(JSONArray(raw))
         } catch (_: Exception) {
             getDefaultTiles()
         }
+        // Layouts made before the Hub existed get its tile once, at the top of Start.
+        if (currentSpace == MAIN_SPACE && !hubTileAdded) {
+            hubTileAdded = true
+            if (list.none { it.type == TileType.HUB }) {
+                list.add(0, TileItem(id = "hub_tile", type = TileType.HUB, title = "Hub", size = TileSize.WIDE))
+                saveTiles(list)
+            }
+        }
+        return list
     }
+
+    private var hubTileAdded by boolPref("hub_tile_added", false)
 
     private fun parseTiles(arr: JSONArray): MutableList<TileItem> {
         val list = mutableListOf<TileItem>()
@@ -508,6 +519,7 @@ class TilePreferences(context: Context) {
 
     private fun getDefaultTiles(): MutableList<TileItem> = mutableListOf(
         TileItem(id = "clock_tile", type = TileType.CLOCK_WEATHER, title = "Clock", size = TileSize.WIDE),
+        TileItem(id = "hub_tile", type = TileType.HUB, title = "Hub", size = TileSize.WIDE),
         TileItem(id = "calendar_tile", type = TileType.CALENDAR_BIG, title = "Calendar", size = TileSize.MEDIUM),
         TileItem(id = "weather_tile", type = TileType.WEATHER_LIVE, title = "Weather", size = TileSize.WIDE),
         TileItem(id = "battery_tile", type = TileType.BATTERY_STATUS, title = "Battery", size = TileSize.MEDIUM),
