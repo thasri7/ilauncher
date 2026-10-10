@@ -46,6 +46,16 @@ object IconPacks {
             .groupBy({ it.key.substringBefore('/') }, { it.value })
             .mapValues { it.value.first() }
 
+        /** Every icon the pack maps, for picking one by hand. */
+        fun drawableNames(): List<String> = byComponent.values.distinct().sorted()
+
+        @SuppressLint("DiscouragedApi")
+        fun drawableNamed(name: String): Drawable? {
+            val id = resources.getIdentifier(name, "drawable", packPackage)
+            if (id == 0) return null
+            return runCatching { resources.getDrawable(id, null) }.getOrNull()
+        }
+
         // Icon packs name their drawables in appfilter.xml, so they can only be looked up by name.
         @SuppressLint("DiscouragedApi")
         fun drawableFor(packageName: String, activityClass: String?): Drawable? {

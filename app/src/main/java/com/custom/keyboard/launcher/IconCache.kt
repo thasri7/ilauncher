@@ -27,6 +27,64 @@ class IconCache(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     @Volatile
     private var pack: IconPacks.Loaded? = null
+    /** Icons the user chose per app ("pack:<pack>:<drawable>" or "file"). */
+    @Volatile
+    var overrides: Map<String, String> = emptyMap()
+    /** Shape for adaptive icons: "system", "circle", "squircle", "rounded", "teardrop". */
+    @Volatile
+    var shape: String = "system"
+    private val otherPacks = ConcurrentHashMap<String, IconPacks.Loaded?>()
+
+    fun customIconFile(key: String) = java.io.File(context.filesDir, "icons/" + key.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".png")
+
+    private fun overrideIcon(key: String): Drawable? {
+        val spec = overrides[key] ?: return null
+        return when {
+            spec == "file" -> customIconFile(key).takeIf { it.exists() }?.let {
+                android.graphics.BitmapFactory.decodeFile(it.path)?.let { b -> android.graphics.drawable.BitmapDrawable(context.resources, b) }
+            }
+            spec.startsWith("pack:") -> {
+                val packPkg = spec.removePrefix("pack:").substringBefore(':')
+                val name = spec.substringAfterLast(':')
+                otherPacks.getOrPut(packPkg) { IconPacks.load(context, packPkg) }?.drawableNamed(name)
+            }
+            else -> null
+        }
+    }
+
+    /** Draws an adaptive icon's layers inside the chosen shape. */
+    private fun shaped(d: Drawable): Drawable {
+        val a = d as? AdaptiveIconDrawable ?: return d
+        val size = 192
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val path = android.graphics.Path()
+        val s = size.toFloat()
+        when (shape) {
+            "circle" -> path.addCircle(s / 2, s / 2, s / 2, android.graphics.Path.Direction.CW)
+            "rounded" -> path.addRoundRect(0f, 0f, s, s, s * 0.18f, s * 0.18f, android.graphics.Path.Direction.CW)
+            "teardrop" -> path.addRoundRect(android.graphics.RectF(0f, 0f, s, s), floatArrayOf(s / 2, s / 2, s / 2, s / 2, s * 0.12f, s * 0.12f, s / 2, s / 2), android.graphics.Path.Direction.CW)
+            else -> {
+                // Squircle: a superellipse, like many phones' default.
+                val n = 4.0
+                for (i in 0..360) {
+                    val t = Math.toRadians(i.toDouble())
+                    val c = Math.cos(t)
+                    val sn = Math.sin(t)
+                    val x = (s / 2) * (1 + Math.signum(c) * Math.pow(Math.abs(c), 2 / n))
+                    val y = (s / 2) * (1 + Math.signum(sn) * Math.pow(Math.abs(sn), 2 / n))
+                    if (i == 0) path.moveTo(x.toFloat(), y.toFloat()) else path.lineTo(x.toFloat(), y.toFloat())
+                }
+                path.close()
+            }
+        }
+        canvas.clipPath(path)
+        // Adaptive layers are 108 units with the visible 72 in the middle.
+        val pad = size / 4
+        a.background?.apply { setBounds(-pad, -pad, size + pad, size + pad); draw(canvas) }
+        a.foreground?.apply { setBounds(-pad, -pad, size + pad, size + pad); draw(canvas) }
+        return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+    }
 
     /** Switches icon pack ("" = system icons) and drops cached icons. */
     fun setIconPack(packPackage: String, onReady: () -> Unit) {
@@ -38,6 +96,11 @@ class IconCache(private val context: Context) {
     }
 
     private fun load(packageName: String): Drawable? = loaded[packageName] ?: run {
+        overrideIcon(packageName)?.let { custom ->
+            loaded[packageName] = custom
+            fromPack.add(packageName)
+            return@run custom
+        }
         if (packageName == com.custom.keyboard.AppKeys.HUB) {
             return@run androidx.core.content.ContextCompat.getDrawable(context, com.custom.keyboard.R.mipmap.ic_hub)?.also { loaded[packageName] = it }
         }
@@ -66,7 +129,8 @@ class IconCache(private val context: Context) {
         } catch (_: Exception) {
             null
         }
-        icon?.also {
+        val finalIcon = if (packIcon == null && icon != null && shape != "system") runCatching { shaped(icon) }.getOrDefault(icon) else icon
+        finalIcon?.also {
             loaded[packageName] = it
             if (packIcon != null) fromPack.add(packageName) else fromPack.remove(packageName)
         }
@@ -120,7 +184,10 @@ class IconCache(private val context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || packageName == null) return null
         val base = load(packageName) ?: return null
         if (packageName in fromPack || com.custom.keyboard.AppKeys.isClone(packageName)) return null
-        val adaptive = base as? AdaptiveIconDrawable ?: return null
+        // With an icon shape the cached icon is a picture; the themed glyph comes from the original.
+        val adaptive = base as? AdaptiveIconDrawable
+            ?: runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull() as? AdaptiveIconDrawable
+            ?: return null
         val mono = (copyOf(adaptive) as? AdaptiveIconDrawable)?.monochrome ?: return null
         return mono.mutate().apply { setTint(Color.WHITE) }
     }

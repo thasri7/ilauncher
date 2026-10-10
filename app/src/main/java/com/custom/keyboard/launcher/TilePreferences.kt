@@ -126,6 +126,34 @@ class TilePreferences(context: Context) {
     /** Mark apps that have notifications. */
     var textNotify by boolPref("text_notify", true)
 
+    // ── Icons, names, locks ─────────────────────────────────────────────────────────────
+    /** "system", "circle", "squircle", "rounded" or "teardrop" for apps with adaptive icons. */
+    var iconShape by stringPref("icon_shape", "system")
+
+    private fun mapPref(key: String): Map<String, String> = runCatching {
+        val o = JSONObject(prefs.getString(key, "{}") ?: "{}")
+        o.keys().asSequence().associateWith { o.getString(it) }
+    }.getOrDefault(emptyMap())
+
+    private fun putMapEntry(key: String, entry: String, value: String?) {
+        val o = runCatching { JSONObject(prefs.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
+        if (value.isNullOrEmpty()) o.remove(entry) else o.put(entry, value)
+        prefs.edit().putString(key, o.toString()).apply()
+    }
+
+    /** App key → "pack:<pack>:<drawable>" or "file" (a picture saved for it). */
+    fun iconOverrides(): Map<String, String> = mapPref("icon_overrides")
+    fun setIconOverride(app: String, spec: String?) = putMapEntry("icon_overrides", app, spec)
+
+    /** App key → the name the user gave it (All apps, search, Text page, new tiles). */
+    fun labelOverrides(): Map<String, String> = mapPref("label_overrides")
+    fun setLabelOverride(app: String, name: String?) = putMapEntry("label_overrides", app, name)
+
+    /** Apps that need fingerprint, face or PIN to open from the launcher. */
+    var lockedApps: Set<String>
+        get() = prefs.getStringSet("locked_apps", emptySet())?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet("locked_apps", value).apply()
+
     // ── Today page ──────────────────────────────────────────────────────────────────────
     var todayEnabled by boolPref("today_page", true)
     /** Cards on the Today page, in order; a card not listed is off. */

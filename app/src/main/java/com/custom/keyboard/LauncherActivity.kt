@@ -249,7 +249,7 @@ class LauncherActivity : AppCompatActivity() {
             icons.clear()
             installTimes.clear()
             appHelper.reload()
-            allApps = appHelper.getAllApps()
+            allApps = namedApps()
             refreshDrawer()
             refreshTextPage()
             tileAdapter.refreshIcons()
@@ -264,7 +264,7 @@ class LauncherActivity : AppCompatActivity() {
             if (removed && key != null) removeTilesFor(key)
             icons.clear()
             appHelper.reload()
-            allApps = appHelper.getAllApps()
+            allApps = namedApps()
             refreshDrawer()
             refreshTextPage()
             tileAdapter.refreshIcons()
@@ -479,7 +479,10 @@ class LauncherActivity : AppCompatActivity() {
 
         prefs = TilePreferences(this)
         appHelper = AppLauncherHelper(this)
-        icons = IconCache(this)
+        icons = IconCache(this).apply {
+            overrides = prefs.iconOverrides()
+            shape = prefs.iconShape
+        }
         widgets = WidgetTiles(this)
         shortcuts = AppShortcuts(this)
         weather = WeatherRepository(this, prefs)
@@ -557,7 +560,7 @@ class LauncherActivity : AppCompatActivity() {
     private fun loadData() {
         tiles.clear()
         tiles.addAll(prefs.loadTiles())
-        allApps = appHelper.getAllApps()
+        allApps = namedApps()
         seedAppTiles()
 
         media = MediaTileController(this) { if (::tileAdapter.isInitialized) tileAdapter.onMediaChanged() }
@@ -1035,6 +1038,14 @@ class LauncherActivity : AppCompatActivity() {
             reconfigurePages()
         })
         metroOverlay.show(card, MetroOverlay.Style.POPUP, anchor)
+    }
+
+    /** Installed apps with the names the user gave them. */
+    private fun namedApps(): List<AppLauncherHelper.AppEntry> {
+        val names = prefs.labelOverrides()
+        val list = appHelper.getAllApps()
+        if (names.isEmpty()) return list
+        return list.map { app -> names[app.packageName]?.let { app.copy(name = it) } ?: app }.sortedBy { it.name.lowercase() }
     }
 
     // ── Text page (AP15 style) ──────────────────────────────────────────────────────────

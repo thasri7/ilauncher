@@ -1,0 +1,284 @@
+    // ── App names, icons and locks chosen by the user ───────────────────────────────────
+
+    /** Installed apps with the names the user gave them. */
+    private fun namedApps(): List<AppLauncherHelper.AppEntry> {
+        val names = prefs.labelOverrides()
+        val list = appHelper.getAllApps()
+        if (names.isEmpty()) return list
+        return list.map { app -> names[app.packageName]?.let { app.copy(name = it) } ?: app }.sortedBy { it.name.lowercase() }
+    }
+
+    private fun reloadApps() {
+        icons.overrides = prefs.iconOverrides()
+        icons.shape = prefs.iconShape
+        icons.clear()
+        allApps = namedApps()
+        refreshDrawer()
+        refreshTextPage()
+        onIconsChanged()
+        drawerAdapter.notifyDataSetChanged()
+    }
+
+    private fun renameApp(app: AppLauncherHelper.AppEntry) {
+        val original = appHelper.entry(app.packageName)?.name ?: app.name
+        prompt("Rename ${original}", app.name, "Name", allowEmpty = true) { name ->
+            prefs.setLabelOverride(app.packageName, name.takeIf { it.isNotEmpty() && it != original })
+            // Tiles of this app that still show the old name follow along.
+            (tiles + tiles.flatMap { it.children }).filter { it.packageName == app.packageName && it.shortcutId == null && it.title == app.name }
+                .forEach { it.title = name.ifEmpty { original } }
+            prefs.saveTiles(tiles)
+            tileAdapter.restyleAll()
+            reloadApps()
+        }
+    }
+
+    private var iconTarget: String? = null
+    private val iconPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val key = iconTarget
+        iconTarget = null
+        if (uri == null || key == null) return@registerForActivityResult
+        Thread {
+            val ok = runCatching {
+                val src = contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } ?: return@runCatching false
+                // Square, centred crop at a crisp size.
+                val side = minOf(src.width, src.height)
+                val crop = android.graphics.Bitmap.createBitmap(src, (src.width - side) / 2, (src.height - side) / 2, side, side)
+                val scaled = android.graphics.Bitmap.createScaledBitmap(crop, 192, 192, true)
+                val file = icons.customIconFile(key)
+                file.parentFile?.mkdirs()
+                file.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                true
+            }.getOrDefault(false)
+            handler.post {
+                if (ok) {
+                    prefs.setIconOverride(key, "file")
+                    reloadApps()
+                } else toast("Couldn't read that picture")
+            }
+        }.start()
+    }
+
+    /** Pick an app's icon: from any icon pack, from your photos, or the original. */
+    private fun showIconChooser(key: String, title: String) {
+        val card = ui.card()
+        card.addView(ui.header("Icon for $title"))
+        card.addView(ui.action(R.drawable.ic_m_photo, "Choose a picture") {
+            metroOverlay.dismiss()
+            iconTarget = key
+            runCatching { iconPicker.launch("image/*") }.onFailure { toast("No photo picker on this phone") }
+        })
+        IconPacks.installed(this).forEach { pack ->
+            card.addView(ui.actionWithIcon(icons.icon(pack.packageName), "From ${pack.label}", "Pick any icon in this pack") {
+                showPackIcons(key, title, pack)
+            })
+        }
+        if (prefs.iconOverrides().containsKey(key)) card.addView(ui.action(R.drawable.ic_m_reset, "Use the original icon") {
+            metroOverlay.dismiss()
+            prefs.setIconOverride(key, null)
+            icons.customIconFile(key).delete()
+            reloadApps()
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun showPackIcons(key: String, title: String, pack: IconPacks.Pack) {
+        val card = ui.card()
+        card.addView(ui.header("${pack.label}", "Icon for $title"))
+        val filter = ui.input("", "Search icons")
+        card.addView(filter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(ui.dp(16), 0, ui.dp(16), ui.dp(8))
+        })
+        val grid = RecyclerView(this).apply { layoutManager = GridLayoutManager(this@LauncherActivity, 5) }
+        card.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.5f).toInt()))
+        var names: List<String> = emptyList()
+        var shown: List<String> = emptyList()
+        var loaded: IconPacks.Loaded? = null
+        val adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            override fun getItemCount() = shown.size
+            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(ImageView(parent.context).apply {
+                setPadding(ui.dp(8), ui.dp(8), ui.dp(8), ui.dp(8))
+                background = ui.ripple()
+                layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ui.dp(64))
+            }) {}
+            override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+                val name = shown[position]
+                (holder.itemView as ImageView).setImageDrawable(loaded?.drawableNamed(name))
+                holder.itemView.contentDescription = name
+                holder.itemView.setOnClickListener {
+                    hideKeyboard(filter)
+                    metroOverlay.dismiss()
+                    prefs.setIconOverride(key, "pack:${pack.packageName}:$name")
+                    reloadApps()
+                }
+            }
+        }
+        grid.adapter = adapter
+        Thread {
+            val l = IconPacks.load(this, pack.packageName)
+            val n = l?.drawableNames().orEmpty()
+            // Icons that sound like this app first.
+            val words = title.lowercase().split(' ').filter { it.length > 2 }
+            val sorted = n.sortedByDescending { name -> words.count { name.lowercase().contains(it) } }
+            handler.post {
+                loaded = l
+                names = sorted
+                shown = sorted
+                adapter.notifyDataSetChanged()
+                if (sorted.isEmpty()) toast("This pack has no icons to pick")
+            }
+        }.start()
+        filter.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val q = s?.toString()?.trim()?.lowercase().orEmpty().replace(' ', '_')
+                shown = if (q.isEmpty()) names else names.filter { it.lowercase().contains(q) }
+                adapter.notifyDataSetChanged()
+            }
+        })
+        metroOverlay.show(card, MetroOverlay.Style.SHEET) { hideKeyboard(filter) }
+    }
+
+    /** Apps unlocked since you last left the launcher. */
+    private val unlockedApps = HashSet<String>()
+
+    private fun toggleAppLock(key: String, name: String) {
+        if (key in prefs.lockedApps) {
+            authenticate(name, "Remove the lock") {
+                prefs.lockedApps = prefs.lockedApps - key
+                toast("$name unlocked")
+            }
+        } else {
+            prefs.lockedApps = prefs.lockedApps + key
+            toast("$name needs your fingerprint, face or PIN to open")
+        }
+    }
+
+    /** App rows added to an app's menus: rename, icon, lock. */
+    private fun addAppCustomRows(card: LinearLayout, key: String, name: String) {
+        val app = allApps.firstOrNull { it.packageName == key } ?: AppLauncherHelper.AppEntry(name, key)
+        card.addView(ui.action(R.drawable.ic_m_edit, "Rename app", "Everywhere in the launcher") { metroOverlay.dismiss(); renameApp(app) })
+        card.addView(ui.action(R.drawable.ic_m_photo, "Change icon", if (prefs.iconOverrides().containsKey(key)) "Custom icon" else "From an icon pack or a picture") {
+            showIconChooser(key, app.name)
+        })
+        card.addView(ui.toggleRow("Lock app", "Fingerprint, face or PIN to open it from here", key in prefs.lockedApps) {
+            metroOverlay.dismiss()
+            toggleAppLock(key, app.name)
+        })
+    }
+
+    // ── Gesture actions: any gesture can run any of these ───────────────────────────────
+
+    /** Built-in actions a gesture can run, as (spec, label). Apps and shortcuts are "app:" / "shortcut:". */
+    private val builtInActions = listOf(
+        "none" to "Nothing", "notifications" to "Open notifications", "search" to "Search", "lock" to "Lock screen",
+        "glance" to "Glance", "overview" to "Overview", "hub" to "Open the Hub", "today" to "Today page",
+        "apps" to "All apps", "settings" to "Launcher settings", "space" to "Next space", "torch" to "Torch on/off"
+    )
+
+    fun actionLabel(spec: String): String = when {
+        spec.startsWith("app:") -> allApps.firstOrNull { it.packageName == spec.removePrefix("app:") }?.name?.let { "Open $it" } ?: "Open an app"
+        spec.startsWith("shortcut:") -> spec.substringAfterLast('|').let { "Shortcut: $it" }
+        else -> builtInActions.firstOrNull { it.first == spec }?.second ?: spec
+    }
+
+    private fun runAction(spec: String) {
+        when {
+            spec.startsWith("app:") -> launchApp(spec.removePrefix("app:"), null)
+            spec.startsWith("shortcut:") -> {
+                val parts = spec.removePrefix("shortcut:").split('|')
+                if (parts.size >= 2 && !shortcuts.start(parts[0], parts[1], null, null)) toast("That shortcut is no longer available")
+            }
+            spec == "notifications" -> if (!GestureActions.expandNotifications(this)) promptGestureHelper("open the notification shade")
+            spec == "search" -> openSearch()
+            spec == "lock" -> if (!GestureActions.lockScreen()) promptGestureHelper("lock the screen")
+            spec == "glance" -> {
+                startActivity(Intent(this, GlanceActivity::class.java))
+                @Suppress("DEPRECATION")
+                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            }
+            spec == "overview" -> showOverview()
+            spec == "hub" -> launchIntent(Intent(this, com.custom.keyboard.launcher.HubActivity::class.java), null)
+            spec == "today" -> if (pages.today >= 0) pager.setCurrentItem(pages.today, true) else toast("Turn on the Today page in Settings")
+            spec == "apps" -> pager.setCurrentItem(pages.drawer, true)
+            spec == "settings" -> settingsPage.show()
+            spec == "space" -> nextSpace()
+            spec == "torch" -> toggles.toggle("torch")
+        }
+    }
+
+    /** Pick what a gesture does: a built-in action, any app, or any app shortcut. */
+    private fun chooseAction(title: String, current: String, onPick: (String) -> Unit) {
+        val card = ui.card()
+        card.addView(ui.header(title, actionLabel(current)))
+        builtInActions.forEach { (spec, label) ->
+            card.addView(ui.action(if (spec == current) R.drawable.ic_m_check else null, label) {
+                metroOverlay.dismiss()
+                onPick(spec)
+            })
+        }
+        card.addView(ui.divider())
+        card.addView(ui.action(R.drawable.ic_m_apps, "Open an app…") {
+            pickApps("$title: open an app", emptyList(), 1) { apps -> apps.firstOrNull()?.let { onPick("app:${it.packageName}") } }
+        })
+        card.addView(ui.action(R.drawable.ic_m_forward, "Run an app shortcut…") {
+            val list = ui.card()
+            list.addView(ui.header("$title: app shortcut"))
+            val index = shortcutIndex.ifEmpty {
+                visibleApps().flatMap { app -> shortcuts.forPackage(app.packageName, 6).mapNotNull { info -> (info.shortLabel ?: info.longLabel)?.let { Triple(app.packageName, info, it.toString()) } } }
+            }
+            if (index.isEmpty()) list.addView(ui.caption("No app shortcuts found. Set iLauncher as your home app first."))
+            index.forEach { (pkg, info, label) ->
+                list.addView(ui.actionWithIcon(shortcuts.icon(info) ?: icons.icon(pkg), label, allApps.firstOrNull { it.packageName == pkg }?.name) {
+                    metroOverlay.dismiss()
+                    onPick("shortcut:$pkg|${info.id}|$label")
+                })
+            }
+            metroOverlay.show(scrollableSheet(list), MetroOverlay.Style.SHEET)
+        })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    // ── Widget stacks: several widgets in one tile ──────────────────────────────────────
+
+    /** The widget a picked provider should join (null: a new widget tile). */
+    private var stackTarget: TileItem? = null
+
+    private fun widgetStackIds(tile: TileItem): List<Int> =
+        listOf(tile.appWidgetId) + tile.extras["stack"].orEmpty().split(',').mapNotNull { it.toIntOrNull() }
+
+    private fun addToWidgetStack(tile: TileItem) {
+        stackTarget = tile
+        showWidgetPicker()
+    }
+
+    private fun showWidgetStackMenu(tile: TileItem) {
+        val card = ui.card()
+        card.addView(ui.header("Widgets in this tile", "Tap the dots on the tile to switch"))
+        val ids = widgetStackIds(tile)
+        ids.forEachIndexed { i, id ->
+            val info = android.appwidget.AppWidgetManager.getInstance(this).getAppWidgetInfo(id)
+            val label = info?.let { widgets.label(it) } ?: "Widget"
+            card.addView(ui.actionWithIcon(info?.let { widgets.icon(this, it) } ?: icons.icon(info?.provider?.packageName), label,
+                if (i == tile.stackIndex) "Showing" else null,
+                trailingIcon = if (ids.size > 1) R.drawable.ic_m_close else null, trailingDescription = "Remove",
+                onTrailing = if (ids.size > 1) ({
+                    metroOverlay.dismiss()
+                    val rest = ids.filter { it != id }
+                    widgets.delete(id)
+                    tile.appWidgetId = rest.first()
+                    tile.extras["stack"] = rest.drop(1).joinToString(",")
+                    if (rest.size == 1) tile.extras.remove("stack")
+                    tile.stackIndex = 0
+                    restyle(tile)
+                }) else null
+            ) {
+                metroOverlay.dismiss()
+                tile.stackIndex = i
+                tileAdapter.refresh(tile, MetroTileAdapter.PAYLOAD_TICK)
+            })
+        }
+        card.addView(ui.action(R.drawable.ic_m_add, "Add a widget to this tile") { metroOverlay.dismiss(); addToWidgetStack(tile) })
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+

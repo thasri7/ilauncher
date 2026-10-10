@@ -34,6 +34,19 @@ object HubActions {
 
     fun canMarkReadInApp(entry: HubStore.Entry): Boolean = live(entry)?.let { readAction(it) } != null
 
+    fun canReply(sbn: StatusBarNotification): Boolean = replyAction(sbn) != null
+
+    /** Reply to a live notification (tile menus); returns false if the app doesn't allow it. */
+    fun replyTo(context: Context, sbn: StatusBarNotification, text: String): Boolean {
+        val action = replyAction(sbn) ?: return false
+        val inputs = action.remoteInputs ?: return false
+        val intent = Intent().addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        val results = Bundle()
+        inputs.forEach { results.putCharSequence(it.resultKey, text) }
+        RemoteInput.addResultsToIntent(inputs, intent, results)
+        return runCatching { action.actionIntent.send(context, 0, intent) }.isSuccess
+    }
+
     /** Sends [text] through the app's reply action. Returns false if it can't be sent. */
     fun reply(context: Context, entry: HubStore.Entry, text: String): Boolean {
         val sbn = live(entry) ?: return false
