@@ -126,6 +126,12 @@ class TilePreferences(context: Context) {
     /** Mark apps that have notifications. */
     var textNotify by boolPref("text_notify", true)
 
+    // ── Today page ──────────────────────────────────────────────────────────────────────
+    var todayEnabled by boolPref("today_page", true)
+    /** Cards on the Today page, in order; a card not listed is off. */
+    var todayCards by stringPref("today_cards", "weather,agenda,hub,alarm,screen,steps,photos,note,battery")
+    var todayNote by stringPref("today_note", "")
+
     // ── Hub ─────────────────────────────────────────────────────────────────────────────
     /** Days the Hub keeps messages. */
     var hubKeepDays by intPref("hub_keep_days", 7)

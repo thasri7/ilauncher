@@ -167,6 +167,7 @@ class LauncherActivity : AppCompatActivity() {
     private var touchHelper: ItemTouchHelper? = null
     private lateinit var gridLayoutManager: MetroGridLayoutManager
     private lateinit var tileAdapter: MetroTileAdapter
+    private lateinit var pages: LauncherPagerAdapter
     private lateinit var drawerAdapter: AppDrawerAdapter
     private lateinit var searchAdapter: AppDrawerAdapter
 
@@ -195,7 +196,7 @@ class LauncherActivity : AppCompatActivity() {
         override fun run() {
             val rv = rvTiles
             if (rv != null && !metroOverlay.isShowing && searchPanel.visibility != View.VISIBLE &&
-                pager.currentItem == LauncherPagerAdapter.PAGE_TILES && rv.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
+                pager.currentItem == pages.tiles && rv.scrollState == RecyclerView.SCROLL_STATE_IDLE &&
                 !isPowerSaving()
             ) {
                 tileAdapter.runLiveStep(rv)
@@ -215,6 +216,7 @@ class LauncherActivity : AppCompatActivity() {
     private val timeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             tileAdapter.tick()
+            if (pager.currentItem == pages.today) refreshToday()
             refreshAgenda()
             refreshWeather(force = false)
             refreshSuggestions()
@@ -277,7 +279,7 @@ class LauncherActivity : AppCompatActivity() {
 
     private val notificationsChanged: () -> Unit = {
         tileAdapter.onNotificationsChanged()
-        if (pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) refreshTextPage()
+        if (pager.currentItem == pages.text) refreshTextPage()
     }
 
     private val userPresentReceiver = object : BroadcastReceiver() {
@@ -634,25 +636,28 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun setupPager() {
         pager.offscreenPageLimit = 1
-        pager.adapter = LauncherPagerAdapter(
+        pages = LauncherPagerAdapter(
             onTilesPageReady = { rv -> setupTilesPage(rv) },
             onDrawerPageReady = { page -> setupDrawerPage(page) },
-            textPage = { obtainTextPage() }
-        ).apply { textPageShown = prefs.textPageEnabled }
+            textPage = { obtainTextPage() },
+            todayPage = { obtainTodayPage() }
+        ).apply { configure(today = prefs.todayEnabled, text = prefs.textPageEnabled) }
+        pager.adapter = pages
+        pager.setCurrentItem(pages.tiles, false)
         tvTitle.text = spaceName()
-        tvTitle.setOnClickListener { if (pager.currentItem == LauncherPagerAdapter.PAGE_TILES) showOverview() else showJumpList() }
+        tvTitle.setOnClickListener { if (pager.currentItem == pages.tiles) showOverview() else showJumpList() }
         // Swipe right on Start (there is no page to its left): next space, or the chosen action.
         val swipeRight = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             private var startedOnTiles = false
 
             override fun onDown(e: MotionEvent): Boolean {
-                startedOnTiles = pager.currentItem == LauncherPagerAdapter.PAGE_TILES
+                startedOnTiles = pager.currentItem == pages.tiles
                 return false
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 val start = e1 ?: return false
-                if (!startedOnTiles || pager.currentItem != LauncherPagerAdapter.PAGE_TILES || tileAdapter.editMode || metroOverlay.isShowing) return false
+                if (!startedOnTiles || pager.currentItem != pages.tiles || pages.today >= 0 || tileAdapter.editMode || metroOverlay.isShowing) return false
                 if (e2.x - start.x > ui.dp(90) && velocityX > 1200 && abs(velocityX) > 2 * abs(velocityY)) {
                     runSwipeRightGesture()
                     return true
@@ -674,13 +679,15 @@ class LauncherActivity : AppCompatActivity() {
             }
 
             override fun onPageSelected(position: Int) {
-                val onTiles = position == LauncherPagerAdapter.PAGE_TILES
-                swapTitle(when (position) {
-                    LauncherPagerAdapter.PAGE_TILES -> spaceName()
-                    LauncherPagerAdapter.PAGE_TEXT -> "apps"
+                val onTiles = position == pages.tiles
+                swapTitle(when (pages.kindAt(position)) {
+                    LauncherPagerAdapter.Kind.TILES -> spaceName()
+                    LauncherPagerAdapter.Kind.TEXT -> "apps"
+                    LauncherPagerAdapter.Kind.TODAY -> "today"
                     else -> "all apps"
                 })
-                if (position != LauncherPagerAdapter.PAGE_TEXT) textPage?.let { page ->
+                if (pages.kindAt(position) == LauncherPagerAdapter.Kind.TODAY) refreshToday()
+                if (position != pages.text) textPage?.let { page ->
                     hideKeyboard(page)
                     page.clearSearch()
                 }
@@ -692,6 +699,340 @@ class LauncherActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    // ── Today page: your day at a glance, left of Start ─────────────────────────────────
+
+    private var todayColumn: LinearLayout? = null
+    private var todayRoot: View? = null
+
+    private val photosPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) refreshToday() else toast("Recent photos stay hidden")
+    }
+
+    private fun reconfigurePages() {
+        val kind = pages.kindAt(pager.currentItem)
+        pages.configure(today = prefs.todayEnabled, text = prefs.textPageEnabled)
+        if (!prefs.textPageEnabled) textPage = null
+        if (!prefs.todayEnabled) {
+            todayRoot = null
+            todayColumn = null
+        }
+        // Stay on the same page if it still exists, else go to Start.
+        val target = kind?.let { pages.positionOf(it) }?.takeIf { it >= 0 } ?: pages.tiles
+        pager.setCurrentItem(target, false)
+        refreshTextPage()
+    }
+
+    private fun obtainTodayPage(): View? {
+        if (!prefs.todayEnabled) return null
+        todayRoot?.let { return it }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(12), ui.dp(4), ui.dp(12), systemInsets.bottom + ui.dp(32))
+        }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            clipToPadding = false
+            addView(column)
+        }
+        todayColumn = column
+        todayRoot = scroll
+        refreshToday()
+        return scroll
+    }
+
+    private fun todayCard(title: String, onClick: (() -> Unit)? = null): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(14))
+            background = GradientDrawable().apply {
+                cornerRadius = ui.dp(maxOf(prefs.cornerRadiusDp, 4)).toFloat()
+                setColor(0xCC15171C.toInt())
+            }
+            if (onClick != null) {
+                foreground = ui.ripple()
+                setOnClickListener { onClick() }
+            }
+        }
+        card.addView(ui.text(title.uppercase(), 11f, ui.accentText, Typeface.create("sans-serif-medium", Typeface.NORMAL)).apply {
+            letterSpacing = 0.1f
+            setPadding(0, 0, 0, ui.dp(6))
+        })
+        todayColumn?.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = ui.dp(10)
+        })
+        return card
+    }
+
+    private fun line(text: String, size: Float = 15f, color: Int = Color.WHITE) = ui.text(text, size, color).apply {
+        maxLines = 2
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        setPadding(0, ui.dp(2), 0, ui.dp(2))
+    }
+
+    /** Rebuilds the Today page from live data; cheap, so it runs whenever the page is shown. */
+    private fun refreshToday() {
+        val column = todayColumn ?: return
+        column.removeAllViews()
+        val now = Calendar.getInstance()
+        val hour = now.get(Calendar.HOUR_OF_DAY)
+        column.addView(ui.text(when (hour) {
+            in 5..11 -> "Good morning"
+            in 12..16 -> "Good afternoon"
+            in 17..21 -> "Good evening"
+            else -> "Good night"
+        }, 30f, face = lightFace).apply { setPadding(ui.dp(6), ui.dp(6), 0, 0) })
+        column.addView(ui.text(DateFormat.format("EEEE, d MMMM", now).toString(), 15f, 0xCCFFFFFF.toInt()).apply {
+            setPadding(ui.dp(6), 0, 0, ui.dp(14))
+        })
+        prefs.todayCards.split(',').map { it.trim() }.forEach { card ->
+            when (card) {
+                "weather" -> todayWeather()
+                "agenda" -> todayAgenda()
+                "hub" -> todayHub()
+                "alarm" -> todayAlarm()
+                "screen" -> todayScreenTime()
+                "steps" -> todaySteps()
+                "photos" -> todayPhotos()
+                "note" -> todayNote()
+                "battery" -> todayBattery()
+            }
+        }
+        column.addView(ui.action(R.drawable.ic_m_edit, "Edit Today", "Choose and order the cards") { showTodayCards() })
+    }
+
+    private fun todayWeather() {
+        val r = weather.report
+        val card = todayCard("Weather") { if (weather.hasLocation) showWeatherPanel() else showWeatherSetup() }
+        if (r == null) {
+            card.addView(line(if (weather.hasLocation) "Updating…" else "Tap to choose your city", 14f, 0xCCFFFFFF.toInt()))
+            return
+        }
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.icon(WeatherCodes.icon(r.code, r.isDay), 40))
+            addView(ui.text(deg(r.temperature), 34f, face = lightFace).apply { setPadding(ui.dp(12), 0, ui.dp(12), 0) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(ui.text(WeatherCodes.describe(r.code), 15f))
+                addView(ui.text(listOfNotNull(r.today?.let { "${deg(it.max)} / ${deg(it.min)}" }, r.place).joinToString(" · "), 12f, 0xB3FFFFFF.toInt()))
+            })
+        })
+    }
+
+    private var todayEvents: List<AgendaProvider.Event> = emptyList()
+
+    private fun todayAgenda() {
+        val card = todayCard("Calendar") {
+            launchIntent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR), null)
+        }
+        if (!AgendaProvider.hasPermission(this)) {
+            card.addView(line("Tap to show your events", 14f, 0xCCFFFFFF.toInt()))
+            card.setOnClickListener { requestCalendarAccess() }
+            return
+        }
+        AgendaProvider.loadAsync(this, days = 2, max = 5) { events ->
+            if (events != todayEvents) {
+                todayEvents = events
+                refreshToday()
+            }
+        }
+        if (todayEvents.isEmpty()) card.addView(line("Nothing planned today or tomorrow", 14f, 0xCCFFFFFF.toInt()))
+        todayEvents.forEach { e ->
+            val time = if (e.allDay) "All day" else DateFormat.getTimeFormat(this).format(java.util.Date(e.begin))
+            val day = if (DateUtils.isToday(e.begin)) "" else "Tomorrow · "
+            card.addView(line("$day$time   ${e.title}"))
+        }
+    }
+
+    private fun todayHub() {
+        val card = todayCard("Hub") { launchIntent(Intent(this, com.custom.keyboard.launcher.HubActivity::class.java), null) }
+        if (!NotificationHub.isAccessGranted(this)) {
+            card.addView(line("Tap to collect all your messages here", 14f, 0xCCFFFFFF.toInt()))
+            return
+        }
+        val all = com.custom.keyboard.launcher.HubStore.all(this).filter { !it.mine && it.app !in prefs.hubMuted }
+        val unread = all.filter { !it.read }
+        card.addView(ui.text(if (unread.isEmpty()) "All caught up" else "${unread.size} new", 22f, face = lightFace))
+        unread.take(4).forEach { e ->
+            card.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, ui.dp(4), 0, ui.dp(2))
+                addView(ImageView(context).apply { setImageDrawable(icons.icon(e.app)) }, LinearLayout.LayoutParams(ui.dp(20), ui.dp(20)))
+                addView(line("${e.conversation.ifEmpty { e.title }}: ${e.text}", 14f).apply { maxLines = 1; setPadding(ui.dp(10), 0, 0, 0) })
+            })
+        }
+    }
+
+    private fun todayAlarm() {
+        val next = getSystemService(android.app.AlarmManager::class.java)?.nextAlarmClock ?: return
+        val card = todayCard("Next alarm") { launchIntent(Intent(AlarmClock.ACTION_SHOW_ALARMS), null) }
+        val soon = next.triggerTime - System.currentTimeMillis() < 24 * 3_600_000L
+        card.addView(ui.text(
+            (if (soon) "" else DateFormat.format("EEE ", next.triggerTime).toString()) + DateFormat.getTimeFormat(this).format(java.util.Date(next.triggerTime)),
+            22f, face = lightFace
+        ))
+        card.addView(line("in " + com.custom.keyboard.launcher.UsageReader.formatDuration(next.triggerTime - System.currentTimeMillis()), 13f, 0xB3FFFFFF.toInt()))
+    }
+
+    private fun todayScreenTime() {
+        if (!com.custom.keyboard.launcher.UsageReader.hasAccess(this)) return
+        com.custom.keyboard.launcher.UsageReader.refreshScreenTime(this, homeApps) { refreshToday() }
+        val st = com.custom.keyboard.launcher.UsageReader.screenTime ?: return
+        val card = todayCard("Screen time") { showScreenTime() }
+        card.addView(ui.text(com.custom.keyboard.launcher.UsageReader.formatDuration(st.totalMs) + if (st.unlocks > 0) "  ·  ${st.unlocks} unlocks" else "", 20f, face = lightFace))
+        st.top.take(3).forEach { (pkg, ms) -> card.addView(line("${tileCallbacks.appLabel(pkg)}  ${com.custom.keyboard.launcher.UsageReader.formatDuration(ms)}", 13f, 0xCCFFFFFF.toInt())) }
+    }
+
+    private fun todaySteps() {
+        val steps = stepCounter.today ?: return
+        val card = todayCard("Steps") { editStepGoal() }
+        val goal = prefs.stepGoal.coerceAtLeast(1000)
+        card.addView(ui.text(String.format(java.util.Locale.getDefault(), "%,d", steps), 22f, face = lightFace))
+        card.addView(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = goal
+            progress = steps.coerceAtMost(goal)
+            progressTintList = ColorStateList.valueOf(prefs.accentColorInt)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ui.dp(8)).apply { topMargin = ui.dp(6) })
+        card.addView(line(if (steps >= goal) "Goal reached" else "${goal - steps} to go", 13f, 0xB3FFFFFF.toInt()))
+    }
+
+    private fun photosPermissionName(): String =
+        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+
+    private fun todayPhotos() {
+        val card = todayCard("Recent photos") {
+            launchIntent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_GALLERY), null)
+        }
+        if (ContextCompat.checkSelfPermission(this, photosPermissionName()) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            card.addView(line("Tap to show your latest photos", 14f, 0xCCFFFFFF.toInt()))
+            card.setOnClickListener { photosPermission.launch(photosPermissionName()) }
+            return
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        card.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        })
+        val size = ui.dp(76)
+        Thread {
+            val uris = runCatching {
+                val list = ArrayList<Uri>()
+                contentResolver.query(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    arrayOf(android.provider.MediaStore.Images.Media._ID), null, null,
+                    "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC"
+                )?.use { c -> while (c.moveToNext() && list.size < 10) list.add(android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0))) }
+                list
+            }.getOrDefault(arrayListOf())
+            val thumbs = uris.mapNotNull { uri ->
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= 29) contentResolver.loadThumbnail(uri, android.util.Size(size, size), null)
+                    else @Suppress("DEPRECATION") android.provider.MediaStore.Images.Thumbnails.getThumbnail(
+                        contentResolver, android.content.ContentUris.parseId(uri), android.provider.MediaStore.Images.Thumbnails.MINI_KIND, null
+                    )
+                }.getOrNull()?.let { uri to it }
+            }
+            handler.post {
+                thumbs.forEach { (uri, bmp) ->
+                    row.addView(ImageView(this).apply {
+                        setImageBitmap(bmp)
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        clipToOutline = true
+                        background = GradientDrawable().apply { cornerRadius = ui.dp(6).toFloat(); setColor(0x22FFFFFF) }
+                        setOnClickListener {
+                            runCatching {
+                                startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }
+                    }, LinearLayout.LayoutParams(size, size).apply { marginEnd = ui.dp(6) })
+                }
+                if (thumbs.isEmpty()) card.addView(line("No photos yet", 14f, 0xCCFFFFFF.toInt()))
+            }
+        }.start()
+    }
+
+    private fun todayNote() {
+        val card = todayCard("Note") {
+            prompt("Note", prefs.todayNote, "Something to remember today", multiline = true, allowEmpty = true) { text ->
+                prefs.todayNote = text
+                refreshToday()
+            }
+        }
+        card.addView(line(prefs.todayNote.ifEmpty { "Tap to jot something down" }, 15f, if (prefs.todayNote.isEmpty()) 0x99FFFFFF.toInt() else Color.WHITE).apply { maxLines = 8 })
+    }
+
+    private fun todayBattery() {
+        val b = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return
+        val level = b.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        if (level < 0 || scale <= 0) return
+        val plugged = b.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+        val card = todayCard("Battery") { launchIntent(Intent(Intent.ACTION_POWER_USAGE_SUMMARY), null, Intent(Settings.ACTION_SETTINGS)) }
+        card.addView(ui.text("${level * 100 / scale}%" + if (plugged) "  ·  charging" else "", 22f, face = lightFace))
+    }
+
+    /** Pick and order the Today cards. */
+    private fun showTodayCards() {
+        val names = linkedMapOf(
+            "weather" to "Weather", "agenda" to "Calendar", "hub" to "Hub", "alarm" to "Next alarm",
+            "screen" to "Screen time", "steps" to "Steps", "photos" to "Recent photos", "note" to "Note", "battery" to "Battery"
+        )
+        val order = prefs.todayCards.split(',').map { it.trim() }.filter { it in names }.toMutableList()
+        val card = ui.card()
+        card.addView(ui.header("Today cards", "Switch cards on or off; on ones move up and down"))
+        fun save() {
+            prefs.todayCards = order.joinToString(",")
+            refreshToday()
+        }
+        (order + names.keys.filter { it !in order }).forEach { key ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            row.addView(ui.toggleRow(names[key] ?: key, null, key in order) { on ->
+                if (on) order.add(key) else order.remove(key)
+                save()
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_m_back)
+                rotation = 90f
+                contentDescription = "Move up"
+                setPadding(ui.dp(10), ui.dp(10), ui.dp(10), ui.dp(10))
+                background = ui.ripple()
+                setOnClickListener {
+                    val i = order.indexOf(key)
+                    if (i > 0) {
+                        order.removeAt(i)
+                        order.add(i - 1, key)
+                        save()
+                        metroOverlay.dismiss()
+                        showTodayCards()
+                    }
+                }
+            }, LinearLayout.LayoutParams(ui.dp(44), ui.dp(44)))
+            card.addView(row)
+        }
+        metroOverlay.show(scrollableSheet(card), MetroOverlay.Style.SHEET)
+    }
+
+    private fun showTodayMenu(anchor: View) {
+        val card = ui.card()
+        card.addView(ui.header("Today", "Your day at a glance"))
+        card.addView(ui.action(R.drawable.ic_m_edit, "Edit cards") { showTodayCards() })
+        card.addView(ui.action(R.drawable.ic_m_notifications, "Open the Hub") {
+            metroOverlay.dismiss()
+            launchIntent(Intent(this, com.custom.keyboard.launcher.HubActivity::class.java), null)
+        })
+        card.addView(ui.action(R.drawable.ic_m_close, "Turn off the Today page", "Back on in Settings › Today") {
+            metroOverlay.dismiss()
+            prefs.todayEnabled = false
+            reconfigurePages()
+        })
+        metroOverlay.show(card, MetroOverlay.Style.POPUP, anchor)
     }
 
     // ── Text page (AP15 style) ──────────────────────────────────────────────────────────
@@ -1117,9 +1458,10 @@ class LauncherActivity : AppCompatActivity() {
         btnTogglePage.setOnClickListener { togglePage() }
         findViewById<View>(R.id.btn_open_settings).setOnClickListener { v ->
             // Each page has its own ⋯ menu.
-            when (pager.currentItem) {
-                LauncherPagerAdapter.PAGE_DRAWER -> showDrawerPageMenu(v)
-                LauncherPagerAdapter.PAGE_TEXT -> showTextPageMenu(v)
+            when (pages.kindAt(pager.currentItem)) {
+                LauncherPagerAdapter.Kind.DRAWER -> showDrawerPageMenu(v)
+                LauncherPagerAdapter.Kind.TEXT -> showTextPageMenu(v)
+                LauncherPagerAdapter.Kind.TODAY -> showTodayMenu(v)
                 else -> showStartMenu(v)
             }
         }
@@ -1470,7 +1812,7 @@ class LauncherActivity : AppCompatActivity() {
         tileAdapter.insertTile(tile)
         prefs.saveTiles(tiles)
         drawerAdapter.notifyDataSetChanged()
-        if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+        if (pager.currentItem != pages.tiles) pager.setCurrentItem(pages.tiles, true)
         rvTiles?.postDelayed({ rvTiles?.smoothScrollToPosition(tileAdapter.positionOf(tile)) }, 250)
     }
 
@@ -1658,7 +2000,7 @@ class LauncherActivity : AppCompatActivity() {
         tilesTurnedOut = false
         handler.removeCallbacks(turnstileSafety)
         val motionView = { child: View -> tileAdapter.motionView(rv, child) }
-        if (!prefs.animationsEnabled || pager.currentItem != LauncherPagerAdapter.PAGE_TILES || metroOverlay.isShowing) {
+        if (!prefs.animationsEnabled || pager.currentItem != pages.tiles || metroOverlay.isShowing) {
             MetroMotion.resetTiles(rv, motionView)
             return
         }
@@ -1692,7 +2034,7 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun togglePage() {
-        val target = if (pager.currentItem == LauncherPagerAdapter.PAGE_TILES) LauncherPagerAdapter.PAGE_DRAWER else LauncherPagerAdapter.PAGE_TILES
+        val target = if (pager.currentItem == pages.tiles) pages.drawer else pages.tiles
         pager.setCurrentItem(target, true)
     }
 
@@ -2184,7 +2526,7 @@ class LauncherActivity : AppCompatActivity() {
             card.addView(ui.action(R.drawable.ic_m_sort, "Arrange tiles", "Tidy, sort or group by kind") { showArrange() })
             card.addView(ui.action(R.drawable.ic_m_resize, "Customise Start", "Move, resize, recolour, make folders") {
                 metroOverlay.dismiss()
-                if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+                if (pager.currentItem != pages.tiles) pager.setCurrentItem(pages.tiles, true)
                 tileAdapter.enterEditMode(tiles.firstOrNull()?.id)
             })
         }
@@ -2853,10 +3195,7 @@ class LauncherActivity : AppCompatActivity() {
         override val usageAccess: Boolean get() = UsageReader.hasAccess(this@LauncherActivity)
         override val activityAccess: Boolean get() = !needsActivityPermission()
         override fun applyTextPageSettings() {
-            (pager.adapter as? LauncherPagerAdapter)?.let { adapter ->
-                if (!prefs.textPageEnabled && pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) pager.setCurrentItem(LauncherPagerAdapter.PAGE_DRAWER, false)
-                adapter.textPageShown = prefs.textPageEnabled
-            }
+            reconfigurePages()
             if (!prefs.textPageEnabled) textPage = null
             refreshTextPage()
         }
@@ -3533,7 +3872,7 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun jumpToGroup(header: TileItem?) {
         val rv = rvTiles ?: return
-        if (pager.currentItem != LauncherPagerAdapter.PAGE_TILES) pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+        if (pager.currentItem != pages.tiles) pager.setCurrentItem(pages.tiles, true)
         if (header == null) {
             rv.smoothScrollToPosition(0)
             return
@@ -3899,7 +4238,7 @@ class LauncherActivity : AppCompatActivity() {
             searchPanel.visibility == View.VISIBLE -> closeSearch()
             tileAdapter.editMode -> tileAdapter.exitEditMode()
             closeOpenFolder() -> Unit
-            pager.currentItem != LauncherPagerAdapter.PAGE_TILES -> pager.setCurrentItem(LauncherPagerAdapter.PAGE_TILES, true)
+            pager.currentItem != pages.tiles -> pager.setCurrentItem(pages.tiles, true)
             homePressed || rvTiles?.canScrollVertically(-1) == true -> rvTiles?.smoothScrollToPosition(0)
         }
     }

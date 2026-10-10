@@ -37,6 +37,11 @@
         tools:ignore="ProtectedPermissions" />
     <!-- Steps tile: the phone's step counter. Asked for only when a Steps tile is added. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Today page: your latest photos, asked for only when you tap that card. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <application
         android:allowBackup="true"

@@ -3,58 +3,78 @@ package com.custom.keyboard.launcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.custom.keyboard.R
 
-/** The launcher pages: Start (tiles), All apps, and the optional Text page. */
+/**
+ * The launcher pages, left to right: Today (optional), Start (tiles), All apps, Text page
+ * (optional). Positions depend on which optional pages are on, so callers use [tiles],
+ * [drawer], [text] and [today] instead of fixed numbers.
+ */
 class LauncherPagerAdapter(
     private val onTilesPageReady: (RecyclerView) -> Unit,
     private val onDrawerPageReady: (View) -> Unit,
     /** Builds the Text page, or null when it is turned off. */
-    private val textPage: () -> View?
+    private val textPage: () -> View?,
+    /** Builds the Today page, or null when it is turned off. */
+    private val todayPage: () -> View? = { null }
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    companion object {
-        const val PAGE_TILES = 0
-        const val PAGE_DRAWER = 1
-        const val PAGE_TEXT = 2
+    enum class Kind { TODAY, TILES, DRAWER, TEXT }
+
+    private var kinds: List<Kind> = listOf(Kind.TILES, Kind.DRAWER, Kind.TEXT)
+
+    fun configure(today: Boolean, text: Boolean) {
+        val next = listOfNotNull(if (today) Kind.TODAY else null, Kind.TILES, Kind.DRAWER, if (text) Kind.TEXT else null)
+        if (next == kinds) return
+        kinds = next
+        @Suppress("NotifyDataSetChanged")
+        notifyDataSetChanged()
     }
 
-    var textPageShown = true
-        set(value) {
-            if (field == value) return
-            field = value
-            if (value) notifyItemInserted(PAGE_TEXT) else notifyItemRemoved(PAGE_TEXT)
-        }
+    fun positionOf(kind: Kind): Int = kinds.indexOf(kind)
+    fun kindAt(position: Int): Kind? = kinds.getOrNull(position)
 
-    override fun getItemViewType(position: Int): Int = position
+    val tiles: Int get() = positionOf(Kind.TILES)
+    val drawer: Int get() = positionOf(Kind.DRAWER)
+    /** -1 when the Text page is off. */
+    val text: Int get() = positionOf(Kind.TEXT)
+    /** -1 when the Today page is off. */
+    val today: Int get() = positionOf(Kind.TODAY)
 
-    override fun getItemCount(): Int = if (textPageShown) 3 else 2
+    override fun getItemViewType(position: Int): Int = kinds[position].ordinal
+
+    override fun getItemId(position: Int): Long = kinds[position].ordinal.toLong()
+
+    override fun getItemCount(): Int = kinds.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-        if (viewType == PAGE_TEXT) {
-            val frame = android.widget.FrameLayout(parent.context).apply {
+        return when (Kind.entries[viewType]) {
+            Kind.TODAY, Kind.TEXT -> PageViewHolder(FrameLayout(parent.context).apply {
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            }
-            return PageViewHolder(frame)
+            })
+            Kind.TILES -> PageViewHolder(LayoutInflater.from(parent.context).inflate(R.layout.page_launcher_tiles, parent, false))
+            Kind.DRAWER -> PageViewHolder(LayoutInflater.from(parent.context).inflate(R.layout.page_launcher_drawer, parent, false))
         }
-        val inflater = LayoutInflater.from(parent.context)
-        val layout = if (viewType == PAGE_TILES) R.layout.page_launcher_tiles else R.layout.page_launcher_drawer
-        return PageViewHolder(inflater.inflate(layout, parent, false))
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        when (position) {
-            PAGE_TILES -> onTilesPageReady(holder.itemView.findViewById(R.id.rv_metro_tiles))
-            PAGE_DRAWER -> onDrawerPageReady(holder.itemView)
-            else -> {
-                val frame = holder.itemView as android.widget.FrameLayout
-                val page = textPage() ?: return
-                (page.parent as? ViewGroup)?.removeView(page)
-                frame.removeAllViews()
-                frame.addView(page, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            }
+        when (kinds[position]) {
+            Kind.TILES -> onTilesPageReady(holder.itemView.findViewById(R.id.rv_metro_tiles))
+            Kind.DRAWER -> onDrawerPageReady(holder.itemView)
+            Kind.TEXT -> host(holder, textPage())
+            Kind.TODAY -> host(holder, todayPage())
         }
+    }
+
+    private fun host(holder: RecyclerView.ViewHolder, page: View?) {
+        val frame = holder.itemView as FrameLayout
+        page ?: return
+        if (page.parent === frame) return
+        (page.parent as? ViewGroup)?.removeView(page)
+        frame.removeAllViews()
+        frame.addView(page, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     class PageViewHolder(view: View) : RecyclerView.ViewHolder(view)

@@ -77,6 +77,7 @@ class SettingsPage(
         Section("colours", R.drawable.ic_m_palette, "Colours & icons", { if (prefs.accentFromWallpaper) "Matching wallpaper · ${host.iconPackLabel}" else host.iconPackLabel }),
         Section("tiles", R.drawable.ic_m_live, "Live tiles & motion", { "Animations, tilt, live tiles, auto-grow" }),
         Section("apps", R.drawable.ic_m_search, "All apps & search", { "${if (prefs.drawerStyle == "grid") "Grid" else "List"} · private apps · ${engineName()}" }),
+        Section("today", R.drawable.ic_m_calendar, "Today page", { if (prefs.todayEnabled) "On · swipe right from Start" else "Off" }),
         Section("text", R.drawable.ic_m_title, "Text page", { if (prefs.textPageEnabled) "On · app names sized by use, swipe past All apps" else "Off" }),
         Section("gestures", R.drawable.ic_m_swipe, "Gestures", { "Swipe, double-tap, pinch, two fingers" }),
         Section("battery", R.drawable.ic_m_leaf, "Battery & Glance", { if (prefs.nightstand) "Nightstand on" else if (prefs.batterySaverPause) "Rests in battery saver" else "Always live" }),
@@ -129,6 +130,13 @@ class SettingsPage(
                 "spaces" -> spaces(page)
                 "battery" -> battery(page)
                 "text" -> textPage(page, rerender)
+                "today" -> {
+                    page.addView(ui.toggleRow("Today page", "Left of Start: weather, events, Hub, alarm, screen time, steps, photos and a note", prefs.todayEnabled) {
+                        prefs.todayEnabled = it
+                        host.applyTextPageSettings()
+                    })
+                    page.addView(ui.caption("Edit which cards show from the Today page's ⋯ menu. With Today on, swiping right on Start opens it instead of the next space."))
+                }
                 "start" -> start(page)
                 "background" -> background(page, rerender)
                 "colours" -> colours(page, rerender)
