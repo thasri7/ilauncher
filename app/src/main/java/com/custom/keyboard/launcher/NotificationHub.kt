@@ -40,6 +40,11 @@ object NotificationHub {
     @Volatile
     internal var service: TileNotificationListener? = null
 
+    /** Live system notifications by key, for the Hub's reply / snooze / mark-read actions. */
+    @Volatile
+    var active: Map<String, StatusBarNotification> = emptyMap()
+        private set
+
     fun get(packageName: String?): Entry? = packageName?.let { entries[it] }
 
     /** Packages with notifications, most recent first (for Glance). */
@@ -69,6 +74,7 @@ object NotificationHub {
     private fun CharSequence?.text() = this?.toString().orEmpty()
 
     internal fun publish(notifications: Array<StatusBarNotification>, keyOf: (StatusBarNotification) -> String = { it.packageName }) {
+        active = notifications.associateBy { it.key }
         // Cloned and work-profile apps get their own key ("package#profile"), like their tiles.
         val grouped = notifications
             .filter { it.isClearable && it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
@@ -93,6 +99,7 @@ object NotificationHub {
 
     internal fun clear() {
         entries = emptyMap()
+        active = emptyMap()
         mainHandler.post { listeners.toList().forEach { it() } }
     }
 }
@@ -100,21 +107,33 @@ object NotificationHub {
 /** Bound by the system once the user grants notification access in Settings. */
 class TileNotificationListener : NotificationListenerService() {
 
-    override fun onListenerConnected() {
-        NotificationHub.isConnected = true
-        NotificationHub.service = this
-        refresh()
-    }
-
     override fun onListenerDisconnected() {
         NotificationHub.isConnected = false
         NotificationHub.service = null
         NotificationHub.clear()
     }
 
-    override fun onNotificationPosted(sbn: StatusBarNotification?) = refresh()
+    override fun onListenerConnected() {
+        NotificationHub.isConnected = true
+        NotificationHub.service = this
+        // Anything that arrived while we weren't listening still goes into the Hub.
+        runCatching { activeNotifications?.forEach { record(it) } }
+        refresh()
+    }
 
-    override fun onNotificationRemoved(sbn: StatusBarNotification?) = refresh()
+    private fun record(sbn: StatusBarNotification) {
+        runCatching { HubStore.record(this, sbn, com.custom.keyboard.AppKeys.keyFor(this, sbn.packageName, sbn.user)) }
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        sbn?.let { record(it) }
+        refresh()
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        sbn?.let { runCatching { HubStore.onRemoved(this, it.key) } }
+        refresh()
+    }
 
     private fun refresh() {
         try {

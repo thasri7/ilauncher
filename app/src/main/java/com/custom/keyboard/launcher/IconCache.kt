@@ -38,6 +38,9 @@ class IconCache(private val context: Context) {
     }
 
     private fun load(packageName: String): Drawable? = loaded[packageName] ?: run {
+        if (packageName == com.custom.keyboard.AppKeys.HUB) {
+            return@run androidx.core.content.ContextCompat.getDrawable(context, com.custom.keyboard.R.mipmap.ic_hub)?.also { loaded[packageName] = it }
+        }
         if (com.custom.keyboard.AppKeys.isClone(packageName)) {
             // A cloned / work-profile app: the system icon with its profile badge.
             val pkg = com.custom.keyboard.AppKeys.pkg(packageName)

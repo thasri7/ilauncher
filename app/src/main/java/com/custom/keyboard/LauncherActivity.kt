@@ -273,6 +273,8 @@ class LauncherActivity : AppCompatActivity() {
         override fun onPackagesUnavailable(packageNames: Array<out String>?, user: android.os.UserHandle?, replacing: Boolean) = changed(null, user, false)
     }
 
+    private val hubChanged: () -> Unit = { tileAdapter.onHubChanged() }
+
     private val notificationsChanged: () -> Unit = {
         tileAdapter.onNotificationsChanged()
         if (pager.currentItem == LauncherPagerAdapter.PAGE_TEXT) refreshTextPage()
@@ -1531,6 +1533,8 @@ class LauncherActivity : AppCompatActivity() {
                 else -> editStepGoal()
             }
             TileType.TOGGLES -> Unit
+            TileType.HUB -> if (!NotificationHub.isAccessGranted(this)) requestNotificationAccess()
+                else launchIntent(Intent(this, com.custom.keyboard.launcher.HubActivity::class.java), view)
             TileType.CLOCK_WEATHER -> launchIntent(Intent(AlarmClock.ACTION_SHOW_ALARMS), view)
             TileType.CALENDAR_BIG -> launchIntent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR), view)
             TileType.WEATHER_LIVE -> if (weather.hasLocation) showWeatherPanel() else showWeatherSetup()
@@ -2184,6 +2188,10 @@ class LauncherActivity : AppCompatActivity() {
                 tileAdapter.enterEditMode(tiles.firstOrNull()?.id)
             })
         }
+        card.addView(ui.action(R.drawable.ic_m_notifications, "Hub", "All messages and notifications") {
+            metroOverlay.dismiss()
+            launchIntent(Intent(this, com.custom.keyboard.launcher.HubActivity::class.java), null)
+        })
         card.addView(ui.action(R.drawable.ic_m_overview, "Overview", "Spaces and groups · pinch Start") { showOverview() })
         card.addView(ui.action(R.drawable.ic_m_palette, "Themes", "Change the whole look in one tap") { settingsPage.show("themes") })
         card.addView(ui.action(R.drawable.ic_m_settings, "Settings") { settingsPage.show() })
@@ -2476,7 +2484,7 @@ class LauncherActivity : AppCompatActivity() {
         TileType.APP_SHORTCUT -> tile.shortcutId == null
         TileType.CLOCK_WEATHER, TileType.CALENDAR_BIG, TileType.BATTERY_STATUS, TileType.STACK,
         TileType.STORAGE_STATS, TileType.QUICK_CONTACT, TileType.PHOTOS, TileType.COUNTDOWN,
-        TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS -> true
+        TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS, TileType.HUB -> true
         else -> false
     }
 
@@ -2579,6 +2587,10 @@ class LauncherActivity : AppCompatActivity() {
             if (type == TileType.CALENDAR_BIG) refreshAgenda()
         }
         add(R.drawable.ic_m_apps, "App", "Pin any installed app") { showAppPicker() }
+        add(R.drawable.ic_m_notifications, "Hub", "Every message and notification in one tile") {
+            tile(TileType.HUB, "Hub", TileSize.WIDE)
+            if (!NotificationHub.isAccessGranted(this)) requestNotificationAccess()
+        }
         add(R.drawable.ic_m_stack, "App stack", "Several apps in one tile that take turns") { createStack() }
         add(R.drawable.ic_m_widgets, "Widget", "Any Android widget, inside a tile") { showWidgetPicker() }
         add(R.drawable.ic_m_toggles, "Switches", "Torch, Wi-Fi, Bluetooth, sound, Do not disturb") { tile(TileType.TOGGLES, "Switches", TileSize.MEDIUM) }
@@ -3793,6 +3805,7 @@ class LauncherActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         NotificationHub.addListener(notificationsChanged)
+        com.custom.keyboard.launcher.HubStore.addListener(hubChanged)
         widgets.startListening()
     }
 
@@ -3850,6 +3863,7 @@ class LauncherActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         NotificationHub.removeListener(notificationsChanged)
+        com.custom.keyboard.launcher.HubStore.removeListener(hubChanged)
         widgets.stopListening()
         tileAdapter.exitEditMode()
         tileAdapter.closeFolder()

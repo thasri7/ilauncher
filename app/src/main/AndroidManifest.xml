@@ -138,6 +138,23 @@
                 android:resource="@xml/gesture_service" />
         </service>
 
+        <!-- Hub: every message and notification in one place, with its own icon. -->
+        <activity
+            android:name=".launcher.HubActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_hub"
+            android:label="Hub"
+            android:launchMode="singleTask"
+            android:roundIcon="@mipmap/ic_hub"
+            android:taskAffinity="com.custom.keyboard.hub"
+            android:theme="@style/Theme.CustomKeyboard"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- Setup & Settings Activity -->
         <activity
             android:name=".MainActivity"

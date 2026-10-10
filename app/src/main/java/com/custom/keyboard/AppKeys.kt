@@ -13,6 +13,9 @@ import android.os.UserManager
 object AppKeys {
     fun isClone(key: String?) = key != null && '#' in key
 
+    /** The Hub, listed in All apps like an app of its own. */
+    const val HUB = "com.custom.keyboard/hub"
+
     fun pkg(key: String): String = key.substringBefore('#')
 
     fun user(context: Context, key: String): UserHandle {

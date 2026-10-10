@@ -126,6 +126,15 @@ class TilePreferences(context: Context) {
     /** Mark apps that have notifications. */
     var textNotify by boolPref("text_notify", true)
 
+    // ── Hub ─────────────────────────────────────────────────────────────────────────────
+    /** Days the Hub keeps messages. */
+    var hubKeepDays by intPref("hub_keep_days", 7)
+
+    /** Apps left out of the Hub. */
+    var hubMuted: Set<String>
+        get() = prefs.getStringSet("hub_muted", emptySet())?.toSet() ?: emptySet()
+        set(value) = prefs.edit().putStringSet("hub_muted", value).apply()
+
     /** Per-app Text page settings: custom name, colour, fixed size, hidden. */
     data class TextOverride(val name: String = "", val color: String = "", val level: Int = -1, val hidden: Boolean = false) {
         val isDefault get() = name.isEmpty() && color.isEmpty() && level < 0 && !hidden

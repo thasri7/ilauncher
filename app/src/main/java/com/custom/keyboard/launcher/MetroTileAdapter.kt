@@ -113,7 +113,7 @@ class MetroTileAdapter(
         private const val TYPE_TOGGLES = 18
 
         /** Tile types drawn by [InfoHolder]. */
-        val INFO_TYPES = setOf(TileType.NOTE, TileType.COUNTDOWN, TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS)
+        val INFO_TYPES = setOf(TileType.NOTE, TileType.COUNTDOWN, TileType.WORLD_CLOCK, TileType.SCREEN_TIME, TileType.DATA_USAGE, TileType.STEPS, TileType.HUB)
 
         /** Re-read time/battery/storage values without re-binding anything else. */
         const val PAYLOAD_TICK = "tick"
@@ -320,6 +320,8 @@ class MetroTileAdapter(
 
     fun onStepsChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.STEPS }
 
+    fun onHubChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.HUB }
+
     fun onTogglesChanged() = notifyTypes(PAYLOAD_TICK) { it.type == TileType.TOGGLES }
 
     /**
@@ -521,7 +523,7 @@ class MetroTileAdapter(
             TileType.STACK -> TYPE_STACK
             TileType.TOGGLES -> TYPE_TOGGLES
             TileType.NOTE, TileType.COUNTDOWN, TileType.WORLD_CLOCK, TileType.SCREEN_TIME,
-            TileType.DATA_USAGE, TileType.STEPS -> TYPE_INFO
+            TileType.DATA_USAGE, TileType.STEPS, TileType.HUB -> TYPE_INFO
         }
     }
 
@@ -1961,6 +1963,23 @@ class MetroTileAdapter(
                     backTitle = "${(count * 100L / goal).coerceAtMost(999)}% of your goal",
                     backDetail = String.format(Locale.getDefault(), "About %.1f km", count * 0.00075),
                     progress = count / goal.toFloat()
+                )
+            }
+        }
+        TileType.HUB -> {
+            val all = HubStore.all(context).filter { !it.mine }
+            val unread = all.filter { !it.read }
+            val recent = (unread.ifEmpty { all }).take(if (tile.size.isLarge) 5 else 2)
+            fun line(e: HubStore.Entry) = (e.conversation.ifEmpty { e.title }) + ": " + e.text
+            when {
+                !NotificationHub.isAccessGranted(context) -> Info(R.drawable.ic_m_notifications, "—", detail = "Tap to turn on the Hub", label = tile.title)
+                all.isEmpty() -> Info(R.drawable.ic_m_notifications, "0", detail = "All caught up", label = tile.title)
+                else -> Info(
+                    R.drawable.ic_m_notifications, unread.size.toString(), if (unread.size == 1) "new" else "new",
+                    recent.joinToString("\n") { line(it) },
+                    label = tile.title,
+                    backTitle = "Latest",
+                    backDetail = all.take(6).joinToString("\n") { line(it) }
                 )
             }
         }

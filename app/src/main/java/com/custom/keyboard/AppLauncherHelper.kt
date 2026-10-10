@@ -48,7 +48,13 @@ class AppLauncherHelper(private val context: Context) {
                 for (user in la.profiles) {
                     for (info in la.getActivityList(null, user)) {
                         val pkg = info.applicationInfo.packageName
-                        if (pkg == context.packageName && user == me) continue
+                        if (pkg == context.packageName && user == me) {
+                            // Our own Hub shows up as an app; the launcher itself doesn't.
+                            if (info.componentName.className.endsWith(".HubActivity") && seen.add(AppKeys.HUB)) {
+                                installedApps.add(AppEntry(info.label?.toString() ?: "Hub", AppKeys.HUB, user, info.componentName))
+                            }
+                            continue
+                        }
                         val key = AppKeys.keyFor(context, pkg, user)
                         if (!seen.add(key)) continue
                         var label = info.label?.toString()?.trim().orEmpty()
@@ -84,6 +90,11 @@ class AppLauncherHelper(private val context: Context) {
      * Opens an app (a clone through its own profile). Returns false when it isn't there any more.
      */
     fun start(key: String, sourceBounds: Rect?, options: Bundle?): Boolean {
+        if (key == AppKeys.HUB) {
+            return runCatching {
+                context.startActivity(Intent(context, com.custom.keyboard.launcher.HubActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), options)
+            }.isSuccess
+        }
         if (AppKeys.isClone(key)) {
             val e = entry(key) ?: return false
             val component = e.component ?: return false
@@ -147,7 +158,8 @@ class AppLauncherHelper(private val context: Context) {
     fun getAllApps(): List<AppEntry> = installedApps.sortedBy { it.name.lowercase() }
 
     fun launchIntentFor(packageName: String): Intent? =
-        if (AppKeys.isClone(packageName)) null else try {
+        if (packageName == AppKeys.HUB) Intent(context, com.custom.keyboard.launcher.HubActivity::class.java)
+        else if (AppKeys.isClone(packageName)) null else try {
             context.packageManager.getLaunchIntentForPackage(packageName)
         } catch (_: Exception) {
             null

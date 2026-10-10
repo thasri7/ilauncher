@@ -34,7 +34,9 @@ enum class TileType {
     /** Mobile and Wi-Fi data used this month (needs usage access). */
     DATA_USAGE,
     /** Steps today from the phone's step counter. */
-    STEPS
+    STEPS,
+    /** The Hub: newest messages from every app, unread count. */
+    HUB
 }
 
 /**
