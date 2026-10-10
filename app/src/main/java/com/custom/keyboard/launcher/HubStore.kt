@@ -47,7 +47,7 @@ object HubStore {
     private const val FILE = "hub.json"
     private const val MAX_ENTRIES = 1500
     private val io = Executors.newSingleThreadExecutor()
-    private val main = Handler(Looper.getMainLooper())
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private val listeners = LinkedHashSet<() -> Unit>()
     private val lock = Any()
     private var entries: MutableList<Entry>? = null

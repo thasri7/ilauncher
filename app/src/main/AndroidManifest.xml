@@ -37,6 +37,11 @@
         tools:ignore="ProtectedPermissions" />
     <!-- Steps tile: the phone's step counter. Asked for only when a Steps tile is added. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Search: find and call or message contacts. Asked for only from search. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Search: find your videos and music by name (photos are below). Asked for only from search. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- Today page: your latest photos, asked for only when you tap that card. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission

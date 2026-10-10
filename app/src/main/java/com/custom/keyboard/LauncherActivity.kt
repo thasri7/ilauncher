@@ -170,6 +170,7 @@ class LauncherActivity : AppCompatActivity() {
     private lateinit var pages: LauncherPagerAdapter
     private lateinit var drawerAdapter: AppDrawerAdapter
     private lateinit var searchAdapter: AppDrawerAdapter
+    private lateinit var universalAdapter: com.custom.keyboard.launcher.SearchResultsAdapter
 
     private val tiles = mutableListOf<TileItem>()
     private var allApps = listOf<AppLauncherHelper.AppEntry>()
@@ -603,7 +604,8 @@ class LauncherActivity : AppCompatActivity() {
         )
         val rvSearch = findViewById<RecyclerView>(R.id.rv_search_results)
         rvSearch.layoutManager = LinearLayoutManager(this)
-        rvSearch.adapter = searchAdapter
+        universalAdapter = com.custom.keyboard.launcher.SearchResultsAdapter(ui)
+        rvSearch.adapter = universalAdapter
     }
 
     /** Apps shown in All apps, search and pickers: everything except Private apps. */
@@ -2431,6 +2433,7 @@ class LauncherActivity : AppCompatActivity() {
         keyboardView.translationY = ui.dp(320).toFloat()
         keyboardView.animate().translationY(0f).setStartDelay(0).setDuration(320).setInterpolator(DecelerateInterpolator(2.2f)).start()
         etSearch.requestFocus()
+        prepareSearchIndex()
         filterSearch(etSearch.text.toString())
     }
 
@@ -2443,18 +2446,181 @@ class LauncherActivity : AppCompatActivity() {
         }.start()
     }
 
+    // ── Universal search ────────────────────────────────────────────────────────────────
+
+    private val searchIo = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var searchGeneration = 0
+    /** App shortcuts and upcoming events, read once each time search opens. */
+    @Volatile private var shortcutIndex: List<Triple<String, android.content.pm.ShortcutInfo, String>> = emptyList()
+    private var eventIndex: List<AgendaProvider.Event> = emptyList()
+
+    private val contactsPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) filterSearch(etSearch.text.toString()) else toast("Contacts stay out of search")
+    }
+    private val mediaPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        if (results.values.any { it }) filterSearch(etSearch.text.toString()) else toast("Files stay out of search")
+    }
+
+    private fun prepareSearchIndex() {
+        val apps = visibleApps()
+        searchIo.execute {
+            val index = ArrayList<Triple<String, android.content.pm.ShortcutInfo, String>>()
+            if (shortcuts.isAvailable) apps.forEach { app ->
+                shortcuts.forPackage(app.packageName, 6).forEach { info ->
+                    val label = info.shortLabel?.toString() ?: info.longLabel?.toString() ?: return@forEach
+                    index.add(Triple(app.packageName, info, label))
+                }
+            }
+            shortcutIndex = index
+        }
+        AgendaProvider.loadAsync(this, days = 60, max = 80) { eventIndex = it }
+    }
+
     private fun filterSearch(query: String) {
         val clean = query.trim()
-        val math = mathCalc.evaluate(clean)
-        tvMathResult.visibility = if (math != null) View.VISIBLE else View.GONE
-        if (math != null) tvMathResult.text = "= $math"
-        btnWebSearch.visibility = if (clean.isNotEmpty()) View.VISIBLE else View.GONE
-        tvWebSearchLabel.text = "Search the web for “$clean”"
-        searchActionStrip.visibility = if (math != null || clean.isNotEmpty()) View.VISIBLE else View.GONE
-
-        searchResults = if (clean.isEmpty()) mostUsedApps(8).ifEmpty { visibleApps().take(8) } else rankApps(clean)
-        searchAdapter.submit(searchResults, grouped = false)
+        // The old maths / web strip is replaced by rows in the results list.
+        searchActionStrip.visibility = View.GONE
+        val results = ArrayList<com.custom.keyboard.launcher.SearchResult>()
+        val generation = ++searchGeneration
+        val rates = if (Regex("""^[\d.,]+\s*[a-zA-Z]{3}""").containsMatchIn(clean)) {
+            com.custom.keyboard.launcher.CurrencyRates.get(this) { if (generation == searchGeneration) filterSearch(etSearch.text.toString()) }
+        } else null
+        com.custom.keyboard.launcher.QuickAnswers.answer(clean, rates, com.custom.keyboard.launcher.CurrencyRates.home())?.let { a ->
+            results.add(com.custom.keyboard.launcher.SearchResult("", a.text, a.detail, iconRes = R.drawable.ic_m_live, big = true) {
+                val value = a.text.removePrefix("= ")
+                getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("answer", value))
+                toast("Copied $value")
+            })
+        }
+        searchResults = if (clean.isEmpty()) mostUsedApps(8).ifEmpty { visibleApps().take(8) } else rankApps(clean).take(6)
+        searchResults.forEach { app ->
+            results.add(com.custom.keyboard.launcher.SearchResult(
+                if (clean.isEmpty()) "Most used" else "Apps", app.name, icon = icons.icon(app.packageName),
+                onLongClick = { v -> showDrawerAppMenu(app, v) }
+            ) { v ->
+                launchApp(app.packageName, v)
+                closeSearch()
+            })
+        }
+        val extrasAt = results.size
+        if (clean.length >= 2) {
+            val q = clean.lowercase()
+            shortcutIndex.filter { it.third.lowercase().contains(q) }.take(4).forEach { (pkg, info, label) ->
+                results.add(com.custom.keyboard.launcher.SearchResult(
+                    "Shortcuts", label, allApps.firstOrNull { it.packageName == pkg }?.name,
+                    icon = shortcuts.icon(info) ?: icons.icon(pkg),
+                    actions = listOf(R.drawable.ic_m_pin to { pinShortcut(pkg, info.id, label) })
+                ) {
+                    if (!shortcuts.start(pkg, info.id, null, null)) toast("That shortcut is no longer available")
+                    closeSearch()
+                })
+            }
+            com.custom.keyboard.launcher.SettingsCatalog.search(clean).forEach { page ->
+                results.add(com.custom.keyboard.launcher.SearchResult("Settings", page.title, "Android settings", iconRes = R.drawable.ic_m_settings) {
+                    launchIntent(Intent(page.action), null, Intent(Settings.ACTION_SETTINGS))
+                    closeSearch()
+                })
+            }
+            launcherSettingsMatches(q).forEach { (title, key) ->
+                results.add(com.custom.keyboard.launcher.SearchResult("Settings", title, "iLauncher", iconRes = R.drawable.ic_m_apps) {
+                    closeSearch()
+                    settingsPage.show(key)
+                })
+            }
+            eventIndex.filter { it.title.contains(clean, true) || it.location.contains(clean, true) }.take(3).forEach { e ->
+                results.add(com.custom.keyboard.launcher.SearchResult(
+                    "Calendar", e.title,
+                    DateFormat.format("EEE d MMM", e.begin).toString() + if (e.allDay) "" else " · " + DateFormat.getTimeFormat(this).format(java.util.Date(e.begin)),
+                    iconRes = R.drawable.ic_m_calendar
+                ) {
+                    val uri = android.provider.CalendarContract.CONTENT_URI.buildUpon().appendPath("time").appendPath(e.begin.toString()).build()
+                    launchIntent(Intent(Intent.ACTION_VIEW, uri), null, Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALENDAR))
+                    closeSearch()
+                })
+            }
+            com.custom.keyboard.launcher.HubStore.all(this).filter { !it.mine && (it.text.contains(clean, true) || it.title.contains(clean, true) || it.conversation.contains(clean, true)) }
+                .take(3).forEach { e ->
+                    results.add(com.custom.keyboard.launcher.SearchResult("Messages", e.conversation.ifEmpty { e.title }, e.text, icon = icons.icon(e.app)) {
+                        com.custom.keyboard.launcher.HubActions.open(this, e) { key -> launchApp(key, null) }
+                        closeSearch()
+                    })
+                }
+            results.add(com.custom.keyboard.launcher.SearchResult("Web", "Search the web for “$clean”", iconRes = R.drawable.ic_m_search) {
+                webSearch(clean)
+                closeSearch()
+            })
+            if (!com.custom.keyboard.launcher.DeviceSearch.canReadContacts(this)) {
+                results.add(com.custom.keyboard.launcher.SearchResult("More results", "Search your contacts too", "Call or message people from search", iconRes = R.drawable.ic_m_person) {
+                    contactsPermission.launch(Manifest.permission.READ_CONTACTS)
+                })
+            }
+            if (!com.custom.keyboard.launcher.DeviceSearch.canReadMedia(this)) {
+                results.add(com.custom.keyboard.launcher.SearchResult("More results", "Search your photos, videos and music", iconRes = R.drawable.ic_m_photo) {
+                    mediaPermission.launch(com.custom.keyboard.launcher.DeviceSearch.mediaPermissions())
+                })
+            }
+        }
+        universalAdapter.submit(results)
+        if (clean.length < 2) return
+        // Contacts and files come from the phone's databases, off the main thread.
+        searchIo.execute {
+            val people = com.custom.keyboard.launcher.DeviceSearch.contacts(this, clean)
+            val photos = people.associate { c ->
+                c.name to c.photo?.let { uri ->
+                    runCatching { contentResolver.openInputStream(uri)?.use { android.graphics.drawable.Drawable.createFromStream(it, uri.toString()) } }.getOrNull()
+                }
+            }
+            val files = com.custom.keyboard.launcher.DeviceSearch.files(this, clean)
+            handler.post {
+                if (generation != searchGeneration || (people.isEmpty() && files.isEmpty())) return@post
+                val extra = ArrayList<com.custom.keyboard.launcher.SearchResult>()
+                people.forEach { c ->
+                    extra.add(com.custom.keyboard.launcher.SearchResult(
+                        "People", c.name, c.number.ifEmpty { null },
+                        icon = photos[c.name], iconRes = R.drawable.ic_m_person,
+                        actions = listOfNotNull(
+                            if (c.number.isNotEmpty()) R.drawable.ic_m_phone to {
+                                launchIntent(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(c.number))), null)
+                                closeSearch()
+                            } else null,
+                            if (c.number.isNotEmpty()) R.drawable.ic_kb_chat to {
+                                launchIntent(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(c.number))), null)
+                                closeSearch()
+                            } else null
+                        )
+                    ) {
+                        launchIntent(Intent(Intent.ACTION_VIEW, c.lookup), null)
+                        closeSearch()
+                    })
+                }
+                files.forEach { f ->
+                    extra.add(com.custom.keyboard.launcher.SearchResult(
+                        "Files", f.name, f.kind,
+                        iconRes = when (f.kind) { "Photo" -> R.drawable.ic_m_photo; "Audio" -> R.drawable.ic_m_music; else -> R.drawable.ic_m_play }
+                    ) {
+                        runCatching {
+                            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, f.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }.onFailure { toast("No app can open that") }
+                        closeSearch()
+                    })
+                }
+                val merged = ArrayList(results)
+                // People right after apps, files after the other results.
+                merged.addAll(extrasAt.coerceAtMost(merged.size), extra.filter { it.section == "People" })
+                val webAt = merged.indexOfFirst { it.section == "Web" }.takeIf { it >= 0 } ?: merged.size
+                merged.addAll(webAt, extra.filter { it.section == "Files" })
+                universalAdapter.submit(merged)
+            }
+        }
     }
+
+    /** iLauncher's own settings pages, so "themes" or "text page" finds them. */
+    private fun launcherSettingsMatches(q: String): List<Pair<String, String>> = listOf(
+        "Themes" to "themes", "Start settings" to "start", "Spaces & groups" to "spaces", "Background" to "background",
+        "Colours & icons" to "colours", "Live tiles & motion" to "tiles", "All apps & search" to "apps",
+        "Text page settings" to "text", "Today page" to "today", "Gestures" to "gestures", "Battery & Glance" to "battery",
+        "Weather" to "weather", "Permissions" to "privacy", "Backup & reset" to "backup"
+    ).filter { (title, _) -> title.lowercase().contains(q) || title.lowercase().split(' ', '&').any { it.trim().startsWith(q) } }.take(2)
 
     private fun rankApps(query: String): List<AppLauncherHelper.AppEntry> =
         AppSearch.rank(visibleApps(), query, appHelper.findMatchingApp(query.trim().lowercase())?.takeIf { it.packageName !in prefs.hiddenApps })
@@ -2467,11 +2633,10 @@ class LauncherActivity : AppCompatActivity() {
     }
 
     private fun runTopSearchResult() {
-        val first = searchResults.firstOrNull()
+        val first = universalAdapter.first
         val query = etSearch.text.toString().trim()
         if (first != null && query.isNotEmpty()) {
-            launchApp(first.packageName, null)
-            closeSearch()
+            first.onClick(searchPanel)
         } else if (query.isNotEmpty()) {
             webSearch(query)
             closeSearch()
